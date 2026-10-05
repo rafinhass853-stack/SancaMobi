@@ -66,7 +66,10 @@ export const createRide = onCall(async request => {
   const passengerId=uid(request);
   const pickup={latitude:n(request.data?.pickup?.latitude,"pickup.latitude"),longitude:n(request.data?.pickup?.longitude,"pickup.longitude")};
   const destination={latitude:n(request.data?.destination?.latitude,"destination.latitude"),longitude:n(request.data?.destination?.longitude,"destination.longitude")};
-  const distance=n(request.data?.estimatedDistanceKm,"estimatedDistanceKm"), duration=n(request.data?.estimatedDurationMin,"estimatedDurationMin"), fare=n(request.data?.estimatedFareCents,"estimatedFareCents");
+  const distance=n(request.data?.estimatedDistanceKm,"estimatedDistanceKm"), duration=n(request.data?.estimatedDurationMin,"estimatedDurationMin");
+  if(distance<=0 || distance>500 || duration<=0 || duration>720) throw new HttpsError("invalid-argument","Distância ou duração inválida.");
+  const p=(await db.collection("pricing").doc("default").get()).data() ?? {};
+  const fare=Math.max(Math.round(Number(p.baseFareCents??600)+distance*Number(p.perKmCents??220)+duration*Number(p.perMinuteCents??35)),Number(p.minimumFareCents??1000));
   const drivers=await db.collection("drivers").where("online","==",true).where("approved","==",true).limit(100).get();
   const candidates=drivers.docs.map(d=>({id:d.id,data:d.data()})).filter(x=>Number.isFinite(Number(x.data.latitude))&&Number.isFinite(Number(x.data.longitude))).map(x=>({id:x.id,distance:km(pickup.latitude,pickup.longitude,Number(x.data.latitude),Number(x.data.longitude))})).sort((a,b)=>a.distance-b.distance).slice(0,5);
   const ref=db.collection("rides").doc();
@@ -92,12 +95,14 @@ export const acceptRide = onCall(async request => {
 
 export const updateRideStatus = onCall(async request => {
   const id=uid(request), rideId=String(request.data?.rideId??""), status=String(request.data?.status??"");
-  const valid=["REQUESTED","SEARCHING","OFFERED","ACCEPTED","DRIVER_ARRIVING","DRIVER_ARRIVED","TRIP_STARTED","TRIP_COMPLETED","CANCELLED","EXPIRED","NO_DRIVER","FAILED"];
-  if(!rideId||!valid.includes(status)) throw new HttpsError("invalid-argument","rideId/status inválidos.");
+  const transitions:Record<string,string[]>={ACCEPTED:["DRIVER_ARRIVING","CANCELLED"],DRIVER_ARRIVING:["DRIVER_ARRIVED","CANCELLED"],DRIVER_ARRIVED:["TRIP_STARTED","CANCELLED"],TRIP_STARTED:["TRIP_COMPLETED","CANCELLED"],SEARCHING:["CANCELLED","EXPIRED"],OFFERED:["CANCELLED","EXPIRED"],REQUESTED:["SEARCHING","CANCELLED"]};
+  if(!rideId||!status) throw new HttpsError("invalid-argument","rideId/status inválidos.");
   const ref=db.collection("rides").doc(rideId), snap=await ref.get();
   if(!snap.exists) throw new HttpsError("not-found","Corrida não encontrada.");
-  const ride=snap.data()!;
+  const ride=snap.data()!, current=String(ride.status);
   if(ride.passengerId!==id&&ride.driverId!==id) throw new HttpsError("permission-denied","Você não participa desta corrida.");
+  if(!transitions[current]?.includes(status)) throw new HttpsError("failed-precondition","Transição de corrida inválida.");
+  if(["DRIVER_ARRIVING","DRIVER_ARRIVED","TRIP_STARTED","TRIP_COMPLETED"].includes(status)&&ride.driverId!==id) throw new HttpsError("permission-denied","Somente o motorista pode alterar este status.");
   await ref.update({status,updatedAt:Timestamp.now()});
   return {ok:true,status};
 });
