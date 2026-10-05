@@ -38,3 +38,34 @@ export interface Ride {
   createdAt: string;
   updatedAt: string;
 }
+
+export interface Driver {
+  id: string;
+  displayName: string;
+  email?: string;
+  city: string;
+  approved: boolean;
+  online: boolean;
+  latitude?: number;
+  longitude?: number;
+  vehicleId?: string;
+  status: "PENDING_APPROVAL" | "APPROVED" | "REJECTED";
+}
+
+export interface PricingConfig {
+  baseFareCents: number;
+  perKmCents: number;
+  perMinuteCents: number;
+  minimumFareCents: number;
+  cancellationFeeCents: number;
+  commissionPercent: number;
+}
+
+export interface RideOffer {
+  id: string;
+  rideId: string;
+  driverId: string;
+  status: "OFFERED" | "ACCEPTED" | "REJECTED" | "EXPIRED";
+  distanceToPickupKm: number;
+  createdAt: string;
+}
