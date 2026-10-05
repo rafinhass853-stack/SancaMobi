@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "SancaMobi",
+    "slug": "sancamobi-passenger",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "sancamobi",
+    "userInterfaceStyle": "automatic",
+    "android": {
+      "package": "app.sancamobi",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ]
+    },
+    "plugins": [
+      "expo-router"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
