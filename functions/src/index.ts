@@ -30,16 +30,20 @@ export const healthCheck = onCall(() => ({ ok:true, service:"sancamobi-functions
 
 export const ensurePassengerProfile = onCall(async request => {
   const id=uid(request), name=String(request.data?.displayName ?? request.auth?.token.name ?? "Passageiro");
-  await db.collection("passengers").doc(id).set({userId:id,displayName:name,email:request.auth?.token.email ?? null,active:false,status:"PENDING_APPROVAL",updatedAt:FieldValue.serverTimestamp()},{merge:true});
+  const existing=(await db.collection("passengers").doc(id).get()).data() ?? {};
+  const active=existing.active===true;
+  await db.collection("passengers").doc(id).set({userId:id,displayName:name,email:request.auth?.token.email ?? null,active,status:active?"ACTIVE":"PENDING_APPROVAL",updatedAt:FieldValue.serverTimestamp()},{merge:true});
   await db.collection("users").doc(id).set({role:"PASSENGER",displayName:name,email:request.auth?.token.email ?? null,updatedAt:FieldValue.serverTimestamp()},{merge:true});
-  return {ok:true};
+  return {ok:true,status:active?"ACTIVE":"PENDING_APPROVAL"};
 });
 
 export const ensureDriverProfile = onCall(async request => {
   const id=uid(request), name=String(request.data?.displayName ?? request.auth?.token.name ?? "Motorista");
-  await db.collection("drivers").doc(id).set({userId:id,displayName:name,email:request.auth?.token.email ?? null,status:"PENDING_APPROVAL",online:false,city:"São Carlos",approved:false,deliveryEnabled:true,updatedAt:FieldValue.serverTimestamp()},{merge:true});
+  const existing=(await db.collection("drivers").doc(id).get()).data() ?? {};
+  const approved=existing.approved===true;
+  await db.collection("drivers").doc(id).set({userId:id,displayName:name,email:request.auth?.token.email ?? null,status:approved?"APPROVED":"PENDING_APPROVAL",online:false,city:String(existing.city??"São Carlos"),approved,deliveryEnabled:existing.deliveryEnabled!==false,updatedAt:FieldValue.serverTimestamp()},{merge:true});
   await db.collection("users").doc(id).set({role:"DRIVER",roles:["DRIVER"],displayName:name,email:request.auth?.token.email ?? null,updatedAt:FieldValue.serverTimestamp()},{merge:true});
-  return {ok:true,status:"PENDING_APPROVAL"};
+  return {ok:true,status:approved?"APPROVED":"PENDING_APPROVAL"};
 });
 
 export const setPassengerApproval = onCall(async request => {
@@ -326,9 +330,11 @@ function deliveryFare(distance:number, duration:number, p:any){
 
 export const ensureStoreProfile = onCall(async request => {
   const id=uid(request), name=String(request.data?.displayName ?? request.auth?.token.name ?? "Loja");
-  await db.collection("stores").doc(id).set({storeId:id,ownerId:id,displayName:name,email:request.auth?.token.email ?? null,status:"PENDING_APPROVAL",active:false,updatedAt:FieldValue.serverTimestamp()},{merge:true});
+  const existing=(await db.collection("stores").doc(id).get()).data() ?? {};
+  const active=existing.active===true;
+  await db.collection("stores").doc(id).set({storeId:id,ownerId:id,displayName:name,email:request.auth?.token.email ?? null,status:active?"APPROVED":"PENDING_APPROVAL",active,updatedAt:FieldValue.serverTimestamp()},{merge:true});
   await db.collection("users").doc(id).set({role:"STORE",roles:["STORE"],displayName:name,email:request.auth?.token.email ?? null,updatedAt:FieldValue.serverTimestamp()},{merge:true});
-  return {ok:true,status:"PENDING_APPROVAL"};
+  return {ok:true,status:active?"APPROVED":"PENDING_APPROVAL"};
 });
 
 export const setStoreApproval = onCall(async request => {
