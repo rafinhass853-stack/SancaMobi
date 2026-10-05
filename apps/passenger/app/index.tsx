@@ -1,13 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import * as Location from "expo-location";
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from "firebase/auth";
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged } from "firebase/auth";
 import { httpsCallable } from "firebase/functions";
 import { auth, functions } from "../lib/firebase";
 
 export default function PassengerHome() {
   const [email,setEmail]=useState(""), [password,setPassword]=useState(""), [busy,setBusy]=useState(false);
-  const [authenticated,setAuthenticated]=useState(Boolean(auth.currentUser));
+  const [authenticated,setAuthenticated]=useState(Boolean(auth.currentUser));\n  useEffect(()=>onAuthStateChanged(auth,user=>setAuthenticated(Boolean(user))),[]);
   const [destLat,setDestLat]=useState("-22.0175"), [destLng,setDestLng]=useState("-47.8908");
   const [distance,setDistance]=useState("5"), [duration,setDuration]=useState("15"), [fare,setFare]=useState<number|null>(null);
 
