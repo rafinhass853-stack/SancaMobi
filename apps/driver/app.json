@@ -7,7 +7,7 @@
     "scheme": "sancamobi-driver",
     "userInterfaceStyle": "automatic",
     "android": {
-      "package": "app.sancamobi.driver",
+      "package": "app.sancamobidriver",
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
