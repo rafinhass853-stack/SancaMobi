@@ -77,6 +77,14 @@ jobs:
           printf "%s" "$MERCADOPAGO_ACCESS_TOKEN_TEST" | pnpm dlx firebase-tools@latest functions:secrets:set MERCADOPAGO_ACCESS_TOKEN_TEST --project sancamobi --non-interactive --data-file=-
       - name: Build establishment web
         run: pnpm --filter @sancamobi/store-web build
+        env:
+          VITE_FIREBASE_API_KEY: "${{ secrets.SANCAMOBI_FIREBASE_API_KEY }}"
+          VITE_FIREBASE_AUTH_DOMAIN: sancamobi.firebaseapp.com
+          VITE_FIREBASE_PROJECT_ID: sancamobi
+          VITE_FIREBASE_STORAGE_BUCKET: sancamobi.firebasestorage.app
+          VITE_FIREBASE_MESSAGING_SENDER_ID: "124451108176"
+          VITE_FIREBASE_APP_ID: "1:124451108176:web:cb28814a7beb7ffdff2855"
+          VITE_ENV: production
       - name: Build functions
         run: pnpm --filter @sancamobi/functions build
       - name: Deploy Firebase
