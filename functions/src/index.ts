@@ -356,8 +356,7 @@ export const setMenuPromotion = onCall(async request => {
   const enabled=Boolean(request.data?.enabled);
   const promotionalPriceCents=enabled?menuPriceCents(request.data?.promotionalPriceCents):null;
   const normal=Number(item.data()?.priceCents??0);
-  if(enabled&&promotionalPriceCents!<normal){} 
-  if(enabled&&promotionalPriceCents>normal) throw new HttpsError("invalid-argument","Promoção deve ter preço menor que o normal.");
+  if(enabled && promotionalPriceCents !== null && promotionalPriceCents >= normal) throw new HttpsError("invalid-argument","Promoção deve ter preço menor que o normal.");
   await item.ref.update({promotionalPriceCents,updatedAt:FieldValue.serverTimestamp()});
   return {ok:true};
 });
@@ -384,18 +383,18 @@ export const createFoodOrder = onCall(async request => {
   if(!storeId||rawItems.length<1||rawItems.length>50) throw new HttpsError("invalid-argument","Carrinho inválido.");
   const store=await db.collection("stores").doc(storeId).get();
   if(!store.exists||store.data()?.active!==true) throw new HttpsError("failed-precondition","Loja indisponível.");
-  const ids=rawItems.map((x:any)=>String(x.itemId)).filter(Boolean);
-  const unique=[...new Set(ids)];
+  const ids: string[] = rawItems.map((x:any)=>String(x.itemId)).filter((id:string)=>Boolean(id));
+  const unique: string[] = Array.from(new Set<string>(ids));
   const snaps=await Promise.all(unique.map(id=>db.collection("menuItems").doc(id).get()));
   const byId=new Map(snaps.filter(s=>s.exists).map(s=>[s.id,s.data()!]));
-  const lines=rawItems.map((x:any)=>{
+  const lines: Array<{itemId:string;name:string;quantity:number;unitPriceCents:number;totalCents:number}> = rawItems.map((x:any)=>{
     const item=byId.get(String(x.itemId));
     const qty=Math.max(1,Math.min(20,Math.floor(Number(x.quantity))));
     if(!item||item.storeId!==storeId||item.available!==true||!Number.isFinite(qty)) throw new HttpsError("failed-precondition","Produto indisponível.");
     const unit=Number(item.promotionalPriceCents??item.priceCents);
     return {itemId:item.itemId,name:item.name,quantity:qty,unitPriceCents:unit,totalCents:unit*qty};
   });
-  const subtotalCents=lines.reduce((a,x)=>a+x.totalCents,0);
+  const subtotalCents=lines.reduce((a:number,x:{totalCents:number})=>a+x.totalCents,0);
   const deliveryFeeCents=Math.max(0,Math.round(Number(request.data?.deliveryFeeCents??0)));
   const totalCents=subtotalCents+deliveryFeeCents;
   const ref=db.collection("foodOrders").doc();
