@@ -7,7 +7,7 @@
     "scheme": "sancamobi",
     "userInterfaceStyle": "automatic",
     "android": {
-      "package": "app.sancamobi",
+      "package": "app.sancamobipassageiro",
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION"
