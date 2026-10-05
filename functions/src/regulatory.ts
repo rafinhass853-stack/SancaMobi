@@ -44,3 +44,12 @@ export function passengerEligible(profile: RegulatoryProfile, compliance: Record
       && (!profile.passenger.requiresLocalAuthorization || compliance.localAuthorizationVerified === true)
     : false;
 }
+
+
+export function deliveryEligible(profile: RegulatoryProfile, compliance: Record<string, unknown>): boolean {
+  return profile.delivery.requiresValidLicense === false || compliance.licenseValid === true
+    ? (!profile.delivery.requiresVehicleDocument || compliance.vehicleDocumentVerified === true)
+      && (!profile.delivery.requiresInsurance || compliance.insuranceVerified === true)
+      && (!profile.delivery.requiresLocalAuthorization || compliance.localAuthorizationVerified === true)
+    : false;
+}
