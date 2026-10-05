@@ -116,6 +116,7 @@ export const calculateRideFare = onCall(async request => {
 
 export const createRide = onCall(async request => {
   const passengerId=uid(request);
+  const paymentMethod = normalizePaymentMethod(request.data?.paymentMethod);
   const passenger=await db.collection("passengers").doc(passengerId).get();
   if(!passenger.exists || passenger.data()?.active!==true) throw new HttpsError("failed-precondition","Cadastro do passageiro aguardando aprovação.");
   const pickup={latitude:n(request.data?.pickup?.latitude,"pickup.latitude"),longitude:n(request.data?.pickup?.longitude,"pickup.longitude")};
@@ -127,9 +128,8 @@ export const createRide = onCall(async request => {
   const drivers=await db.collection("drivers").where("online","==",true).where("approved","==",true).limit(100).get();
   const candidates=drivers.docs.map(d=>({id:d.id,data:d.data()})).filter(x=>Number.isFinite(Number(x.data.latitude))&&Number.isFinite(Number(x.data.longitude))).map(x=>({id:x.id,distance:km(pickup.latitude,pickup.longitude,Number(x.data.latitude),Number(x.data.longitude))})).sort((a,b)=>a.distance-b.distance).slice(0,5);
   const ref=db.collection("rides").doc();
-  await ref.set({passengerId,pickup,destination,status:candidates.length?"SEARCHING":"NO_DRIVER",estimatedDistanceKm:distance,estimatedDurationMin:duration,estimatedFareCents:fare,candidateDriverIds:candidates.map(x=>x.id),createdAt:FieldValue.serverTimestamp(),updatedAt:FieldValue.serverTimestamp()});
-  if(candidates.length){const batch=db.batch();for(const c of candidates)batch.set(db.collection("rideOffers").doc(ref.id+"_"+c.id),{rideId:ref.id,driverId:c.id,status:"OFFERED",distanceToPickupKm:c.distance,createdAt:FieldValue.serverTimestamp()});await batch.commit();}
-  return {rideId:ref.id,status:candidates.length?"SEARCHING":"NO_DRIVER",candidates:candidates.length};
+  await ref.set({passengerId,pickup,destination,status:"PAYMENT_PENDING",paymentMethod,paymentStatus:"PENDING",estimatedDistanceKm:distance,estimatedDurationMin:duration,estimatedFareCents:fare,candidateDriverIds:candidates.map(x=>x.id),createdAt:FieldValue.serverTimestamp(),updatedAt:FieldValue.serverTimestamp()});
+  return {rideId:ref.id,status:"PAYMENT_PENDING",fareCents:fare,paymentMethod,candidates:candidates.length};
 });
 
 export const acceptRide = onCall(async request => {
@@ -140,6 +140,7 @@ export const acceptRide = onCall(async request => {
     const ride=await tx.get(rideRef), offer=await tx.get(offerRef), driver=await tx.get(db.collection("drivers").doc(driverId));
     if(!ride.exists||!offer.exists) throw new HttpsError("not-found","Corrida ou oferta não encontrada.");
     if(driver.data()?.approved!==true||driver.data()?.online!==true) throw new HttpsError("failed-precondition","Motorista indisponível.");
+    if(ride.data()?.paymentStatus !== "approved" && ride.data()?.paymentStatus !== "APPROVED") throw new HttpsError("failed-precondition","Pagamento da corrida ainda não foi aprovado.");
     if(!["SEARCHING","OFFERED"].includes(String(ride.data()?.status))) throw new HttpsError("failed-precondition","Corrida não está disponível.");
     tx.update(rideRef,{driverId,status:"ACCEPTED",updatedAt:FieldValue.serverTimestamp()});
     tx.update(offerRef,{status:"ACCEPTED",acceptedAt:FieldValue.serverTimestamp()});
@@ -149,7 +150,7 @@ export const acceptRide = onCall(async request => {
 
 export const updateRideStatus = onCall(async request => {
   const id=uid(request), rideId=String(request.data?.rideId??""), status=String(request.data?.status??"");
-  const transitions:Record<string,string[]>={ACCEPTED:["DRIVER_ARRIVING","CANCELLED"],DRIVER_ARRIVING:["DRIVER_ARRIVED","CANCELLED"],DRIVER_ARRIVED:["TRIP_STARTED","CANCELLED"],TRIP_STARTED:["TRIP_COMPLETED","CANCELLED"],SEARCHING:["CANCELLED","EXPIRED"],OFFERED:["CANCELLED","EXPIRED"],REQUESTED:["SEARCHING","CANCELLED"]};
+  const transitions:Record<string,string[]>={PAYMENT_PENDING:["CANCELLED"],ACCEPTED:["DRIVER_ARRIVING","CANCELLED"],DRIVER_ARRIVING:["DRIVER_ARRIVED","CANCELLED"],DRIVER_ARRIVED:["TRIP_STARTED","CANCELLED"],TRIP_STARTED:["TRIP_COMPLETED","CANCELLED"],SEARCHING:["CANCELLED","EXPIRED"],OFFERED:["CANCELLED","EXPIRED"],REQUESTED:["SEARCHING","CANCELLED"]};
   if(!rideId||!status) throw new HttpsError("invalid-argument","rideId/status inválidos.");
   const ref=db.collection("rides").doc(rideId), snap=await ref.get();
   if(!snap.exists) throw new HttpsError("not-found","Corrida não encontrada.");
@@ -657,6 +658,21 @@ export const mercadoPagoWebhook = onRequest({ secrets: [mercadoPagoAccessToken] 
     const serviceType=String(txData.serviceType), serviceId=String(txData.serviceId);
     const collectionName=serviceType==="RIDE"?"rides":"deliveries";
     await db.collection(collectionName).doc(serviceId).update({paymentStatus:status,updatedAt:FieldValue.serverTimestamp()});
+    if (serviceType === "RIDE" && ["approved","APPROVED"].includes(status)) {
+      const rideSnap = await db.collection("rides").doc(serviceId).get();
+      const ride = rideSnap.data();
+      if (ride && ["PAYMENT_PENDING","NO_DRIVER"].includes(String(ride.status))) {
+        const pickup = ride.pickup;
+        const drivers = await db.collection("drivers").where("online","==",true).where("approved","==",true).limit(100).get();
+        const candidates = drivers.docs.filter(d=>Number.isFinite(Number(d.data().latitude))&&Number.isFinite(Number(d.data().longitude)))
+          .map(d=>({id:d.id,distance:km(Number(pickup.latitude),Number(pickup.longitude),Number(d.data().latitude),Number(d.data().longitude))}))
+          .sort((a,b)=>a.distance-b.distance).slice(0,5);
+        const batch=db.batch();
+        for(const c of candidates) batch.set(db.collection("rideOffers").doc(serviceId+"_"+c.id),{rideId:serviceId,driverId:c.id,status:"OFFERED",distanceToPickupKm:c.distance,createdAt:FieldValue.serverTimestamp()});
+        batch.update(rideSnap.ref,{status:candidates.length?"SEARCHING":"NO_DRIVER",candidateDriverIds:candidates.map(c=>c.id),updatedAt:FieldValue.serverTimestamp()});
+        await batch.commit();
+      }
+    }
     if (serviceType === "DELIVERY" && ["approved","APPROVED"].includes(status)) {
       const deliverySnap = await db.collection("deliveries").doc(serviceId).get();
       const delivery = deliverySnap.data();
