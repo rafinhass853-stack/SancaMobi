@@ -1,4 +1,4 @@
-import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
 import { setGlobalOptions } from "firebase-functions/v2";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { initializeApp } from "firebase-admin/app";
@@ -33,8 +33,8 @@ export const ensurePassengerProfile = onCall(async request => {
 
 export const ensureDriverProfile = onCall(async request => {
   const id=uid(request), name=String(request.data?.displayName ?? request.auth?.token.name ?? "Motorista");
-  await db.collection("drivers").doc(id).set({userId:id,displayName:name,email:request.auth?.token.email ?? null,status:"PENDING_APPROVAL",online:false,city:"São Carlos",approved:false,updatedAt:FieldValue.serverTimestamp()},{merge:true});
-  await db.collection("users").doc(id).set({role:"DRIVER",displayName:name,email:request.auth?.token.email ?? null,updatedAt:FieldValue.serverTimestamp()},{merge:true});
+  await db.collection("drivers").doc(id).set({userId:id,displayName:name,email:request.auth?.token.email ?? null,status:"PENDING_APPROVAL",online:false,city:"São Carlos",approved:false,deliveryEnabled:true,updatedAt:FieldValue.serverTimestamp()},{merge:true});
+  await db.collection("users").doc(id).set({role:"DRIVER",roles:["DRIVER"],displayName:name,email:request.auth?.token.email ?? null,updatedAt:FieldValue.serverTimestamp()},{merge:true});
   return {ok:true,status:"PENDING_APPROVAL"};
 });
 
@@ -207,4 +207,173 @@ export const submitRating = onCall(async request => {
   });
 
   return {ok:true, ratingId:ref.id};
+});
+
+
+function assertParticipant(data:any,id:string){ if(data.storeId!==id && data.driverId!==id && data.courierId!==id && data.passengerId!==id) throw new HttpsError("permission-denied","Você não participa deste serviço."); }
+function deliveryFare(distance:number, duration:number, p:any){
+  const base=Number(p.deliveryBaseFareCents??700), perKm=Number(p.deliveryPerKmCents??180), perMinute=Number(p.deliveryPerMinuteCents??20), min=Number(p.deliveryMinimumFareCents??1200);
+  return Math.max(Math.round(base+distance*perKm+duration*perMinute),min);
+}
+
+export const ensureStoreProfile = onCall(async request => {
+  const id=uid(request), name=String(request.data?.displayName ?? request.auth?.token.name ?? "Loja");
+  await db.collection("stores").doc(id).set({storeId:id,ownerId:id,displayName:name,email:request.auth?.token.email ?? null,status:"PENDING_APPROVAL",active:false,updatedAt:FieldValue.serverTimestamp()},{merge:true});
+  await db.collection("users").doc(id).set({role:"STORE",roles:["STORE"],displayName:name,email:request.auth?.token.email ?? null,updatedAt:FieldValue.serverTimestamp()},{merge:true});
+  return {ok:true,status:"PENDING_APPROVAL"};
+});
+
+export const setStoreApproval = onCall(async request => {
+  requireAdmin(request);
+  const storeId=String(request.data?.storeId??"");
+  const approved=Boolean(request.data?.approved);
+  if(!storeId) throw new HttpsError("invalid-argument","storeId is required.");
+  await db.collection("stores").doc(storeId).update({active:approved,status:approved?"APPROVED":"REJECTED",updatedAt:FieldValue.serverTimestamp()});
+  return {ok:true,storeId,approved};
+});
+
+export const saveDeliveryPricing = onCall(async request => {
+  requireAdmin(request);
+  const data=request.data??{};
+  const fields=["deliveryBaseFareCents","deliveryPerKmCents","deliveryPerMinuteCents","deliveryMinimumFareCents","deliveryCommissionPercent"];
+  const pricing:any={};
+  for(const field of fields){const value=Number(data[field]);if(!Number.isFinite(value)||value<0)throw new HttpsError("invalid-argument",field+" inválido.");pricing[field]=value;}
+  pricing.updatedAt=FieldValue.serverTimestamp();
+  await db.collection("pricing").doc("default").set(pricing,{merge:true});
+  return {ok:true};
+});
+
+export const calculateDeliveryFare = onCall(async request => {
+  uid(request);
+  const distance=n(request.data?.distanceKm,"distanceKm"), duration=n(request.data?.durationMin,"durationMin");
+  if(distance<=0||distance>200||duration<=0||duration>480) throw new HttpsError("invalid-argument","Distância ou duração inválida.");
+  const p=(await db.collection("pricing").doc("default").get()).data()??{};
+  return {fareCents:deliveryFare(distance,duration,p),currency:"BRL",distanceKm:distance,durationMin:duration};
+});
+
+export const createDelivery = onCall(async request => {
+  const storeId=uid(request);
+  const store=await db.collection("stores").doc(storeId).get();
+  if(!store.exists||store.data()?.active!==true) throw new HttpsError("failed-precondition","Loja não aprovada ou inativa.");
+  const pickup=request.data?.pickup, destination=request.data?.destination;
+  const p={latitude:n(pickup?.latitude,"pickup.latitude"),longitude:n(pickup?.longitude,"pickup.longitude")};
+  const d={latitude:n(destination?.latitude,"destination.latitude"),longitude:n(destination?.longitude,"destination.longitude")};
+  const distance=n(request.data?.estimatedDistanceKm,"estimatedDistanceKm"), duration=n(request.data?.estimatedDurationMin,"estimatedDurationMin");
+  if(distance<=0||distance>200||duration<=0||duration>480) throw new HttpsError("invalid-argument","Distância ou duração inválida.");
+  const pricing=(await db.collection("pricing").doc("default").get()).data()??{};
+  const fare=deliveryFare(distance,duration,pricing);
+  const couriers=await db.collection("drivers").where("online","==",true).where("approved","==",true).where("deliveryEnabled","==",true).limit(100).get();
+  const candidates=couriers.docs.map(d=>({id:d.id,data:d.data()})).filter(x=>Number.isFinite(Number(x.data.latitude))&&Number.isFinite(Number(x.data.longitude))).map(x=>({id:x.id,distance:km(p.latitude,p.longitude,Number(x.data.latitude),Number(x.data.longitude))})).sort((a,b)=>a.distance-b.distance).slice(0,5);
+  const ref=db.collection("deliveries").doc();
+  await ref.set({storeId,pickup:p,destination:d,status:candidates.length?"SEARCHING_COURIER":"NO_COURIER",estimatedDistanceKm:distance,estimatedDurationMin:duration,estimatedFareCents:fare,paymentStatus:"PENDING",candidateCourierIds:candidates.map(x=>x.id),createdAt:FieldValue.serverTimestamp(),updatedAt:FieldValue.serverTimestamp()});
+  if(candidates.length){const batch=db.batch();for(const x of candidates)batch.set(db.collection("serviceOffers").doc(ref.id+"_"+x.id),{serviceId:ref.id,serviceType:"DELIVERY",courierId:x.id,status:"OFFERED",distanceToPickupKm:x.distance,createdAt:FieldValue.serverTimestamp()});await batch.commit();}
+  return {deliveryId:ref.id,status:candidates.length?"SEARCHING_COURIER":"NO_COURIER",fareCents:fare,candidates:candidates.length};
+});
+
+export const acceptDelivery = onCall(async request => {
+  const courierId=uid(request), deliveryId=String(request.data?.deliveryId??"");
+  if(!deliveryId) throw new HttpsError("invalid-argument","deliveryId is required.");
+  const ref=db.collection("deliveries").doc(deliveryId), offer=db.collection("serviceOffers").doc(deliveryId+"_"+courierId), driver=db.collection("drivers").doc(courierId);
+  await db.runTransaction(async tx=>{
+    const [deliverySnap,offerSnap,driverSnap]=await Promise.all([tx.get(ref),tx.get(offer),tx.get(driver)]);
+    if(!deliverySnap.exists||!offerSnap.exists) throw new HttpsError("not-found","Entrega ou oferta não encontrada.");
+    if(driverSnap.data()?.approved!==true||driverSnap.data()?.online!==true||driverSnap.data()?.deliveryEnabled!==true) throw new HttpsError("failed-precondition","Entregador indisponível.");
+    if(!["SEARCHING_COURIER","OFFERED"].includes(String(deliverySnap.data()?.status))) throw new HttpsError("failed-precondition","Entrega não está disponível.");
+    tx.update(ref,{courierId,status:"ACCEPTED",updatedAt:FieldValue.serverTimestamp()});
+    tx.update(offer,{status:"ACCEPTED",acceptedAt:FieldValue.serverTimestamp()});
+  });
+  return {ok:true,deliveryId,status:"ACCEPTED"};
+});
+
+export const updateDeliveryStatus = onCall(async request => {
+  const id=uid(request), deliveryId=String(request.data?.deliveryId??""), status=String(request.data?.status??"");
+  const transitions:Record<string,string[]>={ACCEPTED:["GOING_TO_PICKUP","CANCELLED"],GOING_TO_PICKUP:["ARRIVED_PICKUP","CANCELLED"],ARRIVED_PICKUP:["PICKED_UP","CANCELLED"],PICKED_UP:["IN_DELIVERY","CANCELLED"],IN_DELIVERY:["ARRIVED_DESTINATION","CANCELLED"],ARRIVED_DESTINATION:["DELIVERED"],SEARCHING_COURIER:["CANCELLED","EXPIRED"],OFFERED:["CANCELLED","EXPIRED"]};
+  if(!deliveryId||!status) throw new HttpsError("invalid-argument","deliveryId/status inválidos.");
+  const ref=db.collection("deliveries").doc(deliveryId), snap=await ref.get();
+  if(!snap.exists) throw new HttpsError("not-found","Entrega não encontrada.");
+  const data=snap.data()!;
+  assertParticipant(data,id);
+  if(!transitions[String(data.status)]?.includes(status)) throw new HttpsError("failed-precondition","Transição de entrega inválida.");
+  if(!data.courierId && !["SEARCHING_COURIER","OFFERED","CANCELLED","EXPIRED"].includes(status)) throw new HttpsError("failed-precondition","Entregador não atribuído.");
+  await ref.update({status,updatedAt:FieldValue.serverTimestamp(),...(status==="DELIVERED"?{deliveredAt:FieldValue.serverTimestamp()}: {})});
+  return {ok:true,status};
+});
+
+export const createMercadoPagoPix = onCall(async request => {
+  const requester=uid(request), serviceId=String(request.data?.serviceId??""), serviceType=String(request.data?.serviceType??"");
+  if(!["RIDE","DELIVERY"].includes(serviceType)||!serviceId) throw new HttpsError("invalid-argument","serviceId e serviceType são obrigatórios.");
+  const collectionName=serviceType==="RIDE"?"rides":"deliveries";
+  const snap=await db.collection(collectionName).doc(serviceId).get();
+  if(!snap.exists) throw new HttpsError("not-found","Serviço não encontrado.");
+  const data=snap.data()!;
+  assertParticipant(data,requester);
+  if(data.paymentStatus==="APPROVED") return {ok:true,status:"APPROVED",paymentId:data.paymentId};
+  const sellerId=serviceType==="RIDE"?data.driverId:data.courierId;
+  if(!sellerId) throw new HttpsError("failed-precondition","Ainda não existe profissional atribuído.");
+  const seller=await db.collection("drivers").doc(sellerId).get();
+  const sellerData=seller.data()??{};
+  const accessToken=String(sellerData.mercadoPago?.accessToken??"");
+  if(!accessToken) throw new HttpsError("failed-precondition","O profissional ainda não conectou o Mercado Pago.");
+  const amountCents=Number(data.estimatedFareCents??0);
+  if(!Number.isInteger(amountCents)||amountCents<100) throw new HttpsError("failed-precondition","Valor inválido.");
+  const commissionPercent=Number((await db.collection("pricing").doc("default").get()).data()?.commissionPercent??20);
+  const fee=Math.max(0,Math.round(amountCents*commissionPercent/100))/100;
+  const externalReference=serviceType.toLowerCase()+"_"+serviceId;
+  const response=await fetch("https://api.mercadopago.com/v1/payments",{method:"POST",headers:{"Authorization":"Bearer "+accessToken,"Content-Type":"application/json","X-Idempotency-Key":externalReference},body:JSON.stringify({transaction_amount:amountCents/100,description:"SancaMobi "+(serviceType==="RIDE"?"corrida":"entrega"),payment_method_id:"pix",payer:{email:String(request.auth?.token?.email??"cliente@sancamobi.local")},application_fee:fee,external_reference:externalReference,notification_url:process.env.MERCADOPAGO_WEBHOOK_URL})});
+  const payload:any=await response.json();
+  if(!response.ok) throw new HttpsError("internal","Mercado Pago recusou a criação do pagamento.");
+  await db.collection("paymentTransactions").doc(String(payload.id)).set({paymentId:String(payload.id),serviceId,serviceType,sellerId,requesterId:requester,amountCents,applicationFeeCents:Math.round(fee*100),status:String(payload.status??"pending"),createdAt:FieldValue.serverTimestamp(),rawStatusDetail:String(payload.status_detail??"")});
+  await db.collection(collectionName).doc(serviceId).update({paymentId:String(payload.id),paymentStatus:String(payload.status??"pending"),updatedAt:FieldValue.serverTimestamp()});
+  return {ok:true,paymentId:String(payload.id),status:String(payload.status??"pending"),qrCode:payload.point_of_interaction?.transaction_data?.qr_code??null,qrCodeBase64:payload.point_of_interaction?.transaction_data?.qr_code_base64??null,ticketUrl:payload.point_of_interaction?.transaction_data?.ticket_url??null};
+});
+
+export const mercadoPagoWebhook = onRequest(async (req,res) => {
+  try {
+    if(req.method!=="POST"){res.status(405).send("Method Not Allowed");return;}
+    const type=String(req.body?.type??req.query?.type??"");
+    const paymentId=String(req.body?.data?.id??req.query?.["data.id"]??"");
+    if(type!=="payment"||!paymentId){res.status(200).send("ignored");return;}
+    const tx=await db.collection("paymentTransactions").doc(paymentId).get();
+    if(!tx.exists){res.status(200).send("unknown");return;}
+    const accessToken=String((await db.collection("drivers").doc(tx.data()?.sellerId).get()).data()?.mercadoPago?.accessToken??"");
+    if(!accessToken){res.status(200).send("seller-not-connected");return;}
+    const response=await fetch("https://api.mercadopago.com/v1/payments/"+paymentId,{headers:{Authorization:"Bearer "+accessToken}});
+    const payment:any=await response.json();
+    if(!response.ok){res.status(200).send("lookup-failed");return;}
+    const status=String(payment.status??"pending");
+    await tx.ref.update({status,statusDetail:String(payment.status_detail??""),updatedAt:FieldValue.serverTimestamp()});
+    const serviceType=String(tx.data()?.serviceType), serviceId=String(tx.data()?.serviceId);
+    const collectionName=serviceType==="RIDE"?"rides":"deliveries";
+    await db.collection(collectionName).doc(serviceId).update({paymentStatus:status,updatedAt:FieldValue.serverTimestamp()});
+    res.status(200).send("ok");
+  } catch { res.status(200).send("ok"); }
+});
+
+export const mercadoPagoOAuthCallback = onRequest(async (req,res) => {
+  try {
+    const code=String(req.query.code??""), state=String(req.query.state??"");
+    if(!code||!state){res.status(400).send("OAuth inválido");return;}
+    const stateSnap=await db.collection("mercadoPagoOAuthStates").doc(state).get();
+    if(!stateSnap.exists){res.status(400).send("Estado inválido");return;}
+    const stateData=stateSnap.data()!;
+    if(Date.now()-Number(stateData.createdAtMs)>10*60*1000){res.status(400).send("Estado expirado");return;}
+    const body=new URLSearchParams({client_id:String(process.env.MERCADOPAGO_CLIENT_ID??""),client_secret:String(process.env.MERCADOPAGO_CLIENT_SECRET??""),grant_type:"authorization_code",code,redirect_uri:String(process.env.MERCADOPAGO_REDIRECT_URI??"")});
+    const tokenResponse=await fetch("https://api.mercadopago.com/oauth/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body});
+    const token:any=await tokenResponse.json();
+    if(!tokenResponse.ok){res.status(502).send("Falha ao vincular Mercado Pago");return;}
+    await db.collection("drivers").doc(String(stateData.driverId)).set({mercadoPago:{accessToken:token.access_token,refreshToken:token.refresh_token,userId:String(token.user_id),expiresIn:Number(token.expires_in??0),connectedAt:FieldValue.serverTimestamp()}},{merge:true});
+    await stateSnap.ref.delete();
+    res.status(200).send("Mercado Pago conectado ao SancaMobi. Você pode fechar esta janela.");
+  } catch { res.status(500).send("Erro ao concluir conexão"); }
+});
+
+export const startMercadoPagoOAuth = onCall(async request => {
+  const driverId=uid(request);
+  const state=db.collection("mercadoPagoOAuthStates").doc().id;
+  await db.collection("mercadoPagoOAuthStates").doc(state).set({driverId,createdAtMs:Date.now()});
+  const redirectUri=String(process.env.MERCADOPAGO_REDIRECT_URI??"");
+  const clientId=String(process.env.MERCADOPAGO_CLIENT_ID??"");
+  if(!redirectUri||!clientId) throw new HttpsError("failed-precondition","Mercado Pago OAuth ainda não foi configurado no ambiente.");
+  const url="https://auth.mercadopago.com.br/authorization?client_id="+encodeURIComponent(clientId)+"&response_type=code&platform_id=mp&redirect_uri="+encodeURIComponent(redirectUri)+"&state="+encodeURIComponent(state);
+  return {url};
 });
