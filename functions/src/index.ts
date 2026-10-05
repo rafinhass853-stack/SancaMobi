@@ -1,5 +1,6 @@
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
 import { setGlobalOptions } from "firebase-functions/v2";
+import { defineSecret } from "firebase-functions/params";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { initializeApp } from "firebase-admin/app";
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -7,6 +8,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 initializeApp();
 setGlobalOptions({ region: "southamerica-east1", maxInstances: 10 });
 const db = getFirestore();
+const mercadoPagoAccessToken = defineSecret("MERCADOPAGO_ACCESS_TOKEN_TEST");
 
 function uid(request: any): string {
   if (!request.auth?.uid) throw new HttpsError("unauthenticated", "Authentication required.");
@@ -476,7 +478,7 @@ export const updateFoodOrderStatus = onCall(async request => {
   return {ok:true,status};
 });
 
-export const createMercadoPagoPix = onCall(async request => {
+export const createMercadoPagoPix = onCall({ secrets: [mercadoPagoAccessToken] }, async request => {
   const requester=uid(request), serviceId=String(request.data?.serviceId??""), serviceType=String(request.data?.serviceType??"");
   if(!["RIDE","DELIVERY"].includes(serviceType)||!serviceId) throw new HttpsError("invalid-argument","serviceId e serviceType são obrigatórios.");
   const collectionName=serviceType==="RIDE"?"rides":"deliveries";
@@ -485,30 +487,77 @@ export const createMercadoPagoPix = onCall(async request => {
   const data=snap.data()!;
   assertParticipant(data,requester);
   if(data.paymentStatus==="APPROVED") return {ok:true,status:"APPROVED",paymentId:data.paymentId};
-  const sellerId=serviceType==="RIDE"?data.driverId:data.courierId;
-  if(!sellerId) throw new HttpsError("failed-precondition","Ainda não existe profissional atribuído.");
-  const seller=await db.collection("drivers").doc(sellerId).get();
-  const sellerData=seller.data()??{};
-  const accessToken=String(sellerData.mercadoPago?.accessToken??"");
-  if(!accessToken) throw new HttpsError("failed-precondition","O profissional ainda não conectou o Mercado Pago.");
-  const amountCents=Number(data.estimatedFareCents??0);
+  const amountCents=Number(data.estimatedFareCents??data.totalCents??0);
   if(!Number.isInteger(amountCents)||amountCents<100) throw new HttpsError("failed-precondition","Valor inválido.");
-  const commissionPercent=Number((await db.collection("pricing").doc("default").get()).data()?.commissionPercent??20);
-  const fee=Math.max(0,Math.round(amountCents*commissionPercent/100))/100;
+
+  const accessToken=mercadoPagoAccessToken.value();
+  if(!accessToken) throw new HttpsError("failed-precondition","Credencial de teste do Mercado Pago não configurada.");
   const externalReference=serviceType.toLowerCase()+"_"+serviceId;
-  const response=await fetch("https://api.mercadopago.com/v1/payments",{method:"POST",headers:{"Authorization":"Bearer "+accessToken,"Content-Type":"application/json","X-Idempotency-Key":externalReference},body:JSON.stringify({transaction_amount:amountCents/100,description:"SancaMobi "+(serviceType==="RIDE"?"corrida":"entrega"),payment_method_id:"pix",payer:{email:String(request.auth?.token?.email??"cliente@sancamobi.local")},application_fee:fee,external_reference:externalReference,notification_url:process.env.MERCADOPAGO_WEBHOOK_URL})});
+  const payerEmail=String(request.auth?.token?.email??"cliente@sancamobi.local");
+
+  const response=await fetch("https://api.mercadopago.com/v1/orders",{
+    method:"POST",
+    headers:{
+      "Authorization":"Bearer "+accessToken,
+      "Content-Type":"application/json",
+      "X-Idempotency-Key":externalReference
+    },
+    body:JSON.stringify({
+      type:"online",
+      total_amount:(amountCents/100).toFixed(2),
+      external_reference:externalReference,
+      processing_mode:"automatic",
+      transactions:{
+        payments:[{
+          amount:(amountCents/100).toFixed(2),
+          payment_method:{id:"pix",type:"bank_transfer"}
+        }]
+      },
+      payer:{email:payerEmail}
+    })
+  });
   const payload:any=await response.json();
-  if(!response.ok) throw new HttpsError("internal","Mercado Pago recusou a criação do pagamento.");
-  await db.collection("paymentTransactions").doc(String(payload.id)).set({paymentId:String(payload.id),serviceId,serviceType,sellerId,requesterId:requester,amountCents,applicationFeeCents:Math.round(fee*100),status:String(payload.status??"pending"),createdAt:FieldValue.serverTimestamp(),rawStatusDetail:String(payload.status_detail??"")});
-  await db.collection(collectionName).doc(serviceId).update({paymentId:String(payload.id),paymentStatus:String(payload.status??"pending"),updatedAt:FieldValue.serverTimestamp()});
-  return {ok:true,paymentId:String(payload.id),status:String(payload.status??"pending"),qrCode:payload.point_of_interaction?.transaction_data?.qr_code??null,qrCodeBase64:payload.point_of_interaction?.transaction_data?.qr_code_base64??null,ticketUrl:payload.point_of_interaction?.transaction_data?.ticket_url??null};
+  if(!response.ok){
+    console.error("Mercado Pago Orders error",payload);
+    throw new HttpsError("internal","Mercado Pago recusou a criação da order.");
+  }
+
+  const payment=payload.transactions?.payments?.[0]??{};
+  const paymentId=String(payment.id??payload.id??"");
+  const status=String(payment.status??payload.status??"pending");
+  const qrCode=payment.payment_method?.qr_code??null;
+  const qrCodeBase64=payment.payment_method?.qr_code_base64??null;
+  const ticketUrl=payment.payment_method?.ticket_url??null;
+
+  await db.collection("paymentTransactions").doc(paymentId||String(payload.id)).set({
+    paymentId,
+    orderId:String(payload.id??""),
+    serviceId,
+    serviceType,
+    requesterId:requester,
+    amountCents,
+    applicationFeeCents:0,
+    status,
+    statusDetail:String(payment.status_detail??""),
+    provider:"MERCADOPAGO",
+    api:"ORDERS",
+    createdAt:FieldValue.serverTimestamp()
+  });
+  await db.collection(collectionName).doc(serviceId).update({
+    paymentId,
+    paymentOrderId:String(payload.id??""),
+    paymentStatus:status,
+    updatedAt:FieldValue.serverTimestamp()
+  });
+
+  return {ok:true,paymentId,orderId:String(payload.id??""),status,qrCode,qrCodeBase64,ticketUrl};
 });
 
-export const mercadoPagoWebhook = onRequest(async (req,res) => {
+export const mercadoPagoWebhook = onRequest({ secrets: [mercadoPagoAccessToken] }, async (req,res) => {
   try {
     if(req.method!=="POST"){res.status(405).send("Method Not Allowed");return;}
     const type=String(req.body?.type??req.query?.type??"");
-    const paymentId=String(req.body?.data?.id??req.query?.["data.id"]??"");
+    const resourceId=String(req.body?.data?.id??req.query?.["data.id"]??"");
     const signature=String(req.headers["x-signature"]??"");
     const requestId=String(req.headers["x-request-id"]??"");
     const secret=String(process.env.MERCADOPAGO_WEBHOOK_SECRET??"");
@@ -516,27 +565,42 @@ export const mercadoPagoWebhook = onRequest(async (req,res) => {
       const parts=signature.split(",").map(x=>x.trim().split("="));
       const ts=parts.find(x=>x[0]==="ts")?.[1]??"";
       const v1=parts.find(x=>x[0]==="v1")?.[1]??"";
-      const manifest=`id:${paymentId};request-id:${requestId};ts:${ts};`;
+      const manifest=`id:${resourceId};request-id:${requestId};ts:${ts};`;
       const expected=createHmac("sha256",secret).update(manifest).digest("hex");
       if(!v1||v1.length!==expected.length||!timingSafeEqual(Buffer.from(v1),Buffer.from(expected))){res.status(401).send("Invalid signature");return;}
     } else {
       res.status(503).send("Webhook secret not configured"); return;
     }
-    if(type!=="payment"||!paymentId){res.status(200).send("ignored");return;}
-    const tx=await db.collection("paymentTransactions").doc(paymentId).get();
-    if(!tx.exists){res.status(200).send("unknown");return;}
-    const accessToken=String((await db.collection("drivers").doc(tx.data()?.sellerId).get()).data()?.mercadoPago?.accessToken??"");
-    if(!accessToken){res.status(200).send("seller-not-connected");return;}
-    const response=await fetch("https://api.mercadopago.com/v1/payments/"+paymentId,{headers:{Authorization:"Bearer "+accessToken}});
-    const payment:any=await response.json();
-    if(!response.ok){res.status(200).send("lookup-failed");return;}
-    const status=String(payment.status??"pending");
-    await tx.ref.update({status,statusDetail:String(payment.status_detail??""),updatedAt:FieldValue.serverTimestamp()});
-    const serviceType=String(tx.data()?.serviceType), serviceId=String(tx.data()?.serviceId);
+    if(!resourceId){res.status(200).send("ignored");return;}
+
+    const txSnap=await db.collection("paymentTransactions").where("paymentId","==",resourceId).limit(1).get();
+    if(txSnap.empty){res.status(200).send("unknown");return;}
+    const tx=txSnap.docs[0];
+    const txData=tx.data();
+    const accessToken=mercadoPagoAccessToken.value();
+    if(!accessToken){res.status(200).send("provider-not-configured");return;}
+
+    const orderId=String(txData.orderId??"");
+    let payment:any=null;
+    if(type==="order" && orderId){
+      const response=await fetch("https://api.mercadopago.com/v1/orders/"+encodeURIComponent(orderId),{headers:{Authorization:"Bearer "+accessToken}});
+      if(!response.ok){res.status(200).send("lookup-failed");return;}
+      const order:any=await response.json();
+      payment=order.transactions?.payments?.find((p:any)=>String(p.id)===resourceId)??order.transactions?.payments?.[0]??null;
+    } else {
+      payment={id:resourceId,status:String(req.body?.data?.status??"pending")};
+    }
+
+    const status=String(payment?.status??"pending");
+    await tx.ref.update({status,statusDetail:String(payment?.status_detail??""),updatedAt:FieldValue.serverTimestamp()});
+    const serviceType=String(txData.serviceType), serviceId=String(txData.serviceId);
     const collectionName=serviceType==="RIDE"?"rides":"deliveries";
     await db.collection(collectionName).doc(serviceId).update({paymentStatus:status,updatedAt:FieldValue.serverTimestamp()});
     res.status(200).send("ok");
-  } catch { res.status(200).send("ok"); }
+  } catch(error) {
+    console.error("Mercado Pago webhook error",error);
+    res.status(200).send("ok");
+  }
 });
 
 export const mercadoPagoOAuthCallback = onRequest(async (req,res) => {
