@@ -101,3 +101,42 @@ export const updateRideStatus = onCall(async request => {
   await ref.update({status,updatedAt:Timestamp.now()});
   return {ok:true,status};
 });
+
+
+function requireAdmin(request: any): string {
+  const id = uid(request);
+  const role = request.auth?.token?.role;
+  if (!["SUPER_ADMIN","ADMIN","OPERATOR","FINANCE"].includes(role)) {
+    throw new HttpsError("permission-denied", "Acesso administrativo necessário.");
+  }
+  return id;
+}
+
+export const setDriverApproval = onCall(async request => {
+  requireAdmin(request);
+  const driverId = String(request.data?.driverId ?? "");
+  const approved = Boolean(request.data?.approved);
+  if (!driverId) throw new HttpsError("invalid-argument", "driverId is required.");
+  await db.collection("drivers").doc(driverId).update({
+    approved,
+    status: approved ? "APPROVED" : "REJECTED",
+    online: false,
+    updatedAt: FieldValue.serverTimestamp()
+  });
+  return { ok: true, driverId, approved };
+});
+
+export const savePricing = onCall(async request => {
+  requireAdmin(request);
+  const data = request.data ?? {};
+  const fields = ["baseFareCents","perKmCents","perMinuteCents","minimumFareCents","cancellationFeeCents","commissionPercent"];
+  const pricing:any = {};
+  for (const field of fields) {
+    const value = Number(data[field]);
+    if (!Number.isFinite(value) || value < 0) throw new HttpsError("invalid-argument", field + " inválido.");
+    pricing[field] = value;
+  }
+  pricing.updatedAt = FieldValue.serverTimestamp();
+  await db.collection("pricing").doc("default").set(pricing, { merge: true });
+  return { ok: true };
+});
