@@ -48,6 +48,7 @@ export interface Driver {
   city: string;
   approved: boolean;
   online: boolean;
+  deliveryEnabled?: boolean;
   latitude?: number;
   longitude?: number;
   vehicleId?: string;
