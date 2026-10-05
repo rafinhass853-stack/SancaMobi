@@ -24,6 +24,11 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    match /driverCompliance/{driverId} {
+      allow read: if isSelf(driverId) || isAdmin();
+      allow write: if false;
+    }
+
     match /drivers/{driverId} {
       allow read: if isSelf(driverId) || isAdmin();
       allow write: if isAdmin();
