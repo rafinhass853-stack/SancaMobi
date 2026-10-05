@@ -4,7 +4,7 @@ import { collection, doc, onSnapshot, query, orderBy, limit } from "firebase/fir
 import { httpsCallable } from "firebase/functions";
 import { auth, db, functions } from "./lib/firebase";
 
-type Driver = { id:string; displayName?:string; email?:string; status?:string; approved?:boolean; online?:boolean; city?:string };
+type Driver = { id:string; displayName?:string; email?:string; status?:string; approved?:boolean; online?:boolean; deliveryEnabled?:boolean; city?:string };
 type Store = { id:string; displayName?:string; email?:string; status?:string; active?:boolean };
 type Passenger = { id:string; displayName?:string; email?:string; status?:string; active?:boolean };
 
