@@ -25,6 +25,10 @@ jobs:
         run: pnpm --filter @sancamobi/admin typecheck
       - name: Typecheck functions
         run: pnpm --filter @sancamobi/functions typecheck
+      - name: Typecheck passenger
+        run: pnpm --filter @sancamobi/passenger typecheck
+      - name: Typecheck driver
+        run: pnpm --filter @sancamobi/driver typecheck
       - name: Test admin
         run: pnpm --filter @sancamobi/admin test -- --passWithNoTests
 
