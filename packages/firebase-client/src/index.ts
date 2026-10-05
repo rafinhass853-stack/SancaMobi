@@ -13,7 +13,7 @@ const firebaseConfig = {
   messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID ?? "124451108176",
   appId:
     process.env.EXPO_PUBLIC_FIREBASE_APP_ID ??
-    "1:124451108176:web:c7ada8fc6e07de40ff2855"
+    "1:124451108176:web:cb28814a7beb7ffdff2855"
 };
 
 const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
