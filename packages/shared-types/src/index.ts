@@ -4,7 +4,9 @@ export type UserRole =
   | "OPERATOR"
   | "FINANCE"
   | "DRIVER"
-  | "PASSENGER";
+  | "PASSENGER"
+  | "STORE"
+  | "COURIER";
 
 export type RideStatus =
   | "REQUESTED"
@@ -65,6 +67,48 @@ export interface RideOffer {
   id: string;
   rideId: string;
   driverId: string;
+  status: "OFFERED" | "ACCEPTED" | "REJECTED" | "EXPIRED";
+  distanceToPickupKm: number;
+  createdAt: string;
+}
+
+
+export type ServiceType = "RIDE" | "DELIVERY";
+export type DeliveryStatus =
+  | "SEARCHING_COURIER" | "OFFERED" | "ACCEPTED" | "GOING_TO_PICKUP"
+  | "ARRIVED_PICKUP" | "PICKED_UP" | "IN_DELIVERY" | "ARRIVED_DESTINATION"
+  | "DELIVERED" | "CANCELLED" | "EXPIRED" | "NO_COURIER" | "FAILED";
+
+export interface Store {
+  id: string;
+  ownerId: string;
+  displayName: string;
+  email?: string;
+  status: "PENDING_APPROVAL" | "APPROVED" | "REJECTED";
+  active: boolean;
+  address?: Record<string, unknown>;
+}
+
+export interface Delivery {
+  id: string;
+  storeId: string;
+  courierId?: string;
+  pickup: GeoPointValue;
+  destination: GeoPointValue;
+  status: DeliveryStatus;
+  estimatedDistanceKm: number;
+  estimatedDurationMin: number;
+  estimatedFareCents: number;
+  paymentStatus: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ServiceOffer {
+  id: string;
+  serviceId: string;
+  serviceType: ServiceType;
+  courierId: string;
   status: "OFFERED" | "ACCEPTED" | "REJECTED" | "EXPIRED";
   distanceToPickupKm: number;
   createdAt: string;
