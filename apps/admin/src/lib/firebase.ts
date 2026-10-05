@@ -9,7 +9,7 @@ const config = {
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID ?? "sancamobi",
   storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET ?? "sancamobi.firebasestorage.app",
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID ?? "124451108176",
-  appId: import.meta.env.VITE_FIREBASE_APP_ID ?? "1:124451108176:web:c7ada8fc6e07de40ff2855"
+  appId: import.meta.env.VITE_FIREBASE_APP_ID ?? "1:124451108176:web:cb28814a7beb7ffdff2855"
 };
 
 const app = getApps().length ? getApp() : initializeApp(config);
