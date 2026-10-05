@@ -1,0 +1,61 @@
+name: SancaMobi CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.18.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile=false
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-service-account.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.18.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile=false
+      - name: Configure Firebase credentials
+        shell: bash
+        run: printf '%s' '${{ secrets.SANCAMOBI_FIREBASE_SERVICE_ACCOUNT_JSON }}' > "$GOOGLE_APPLICATION_CREDENTIALS"
+      - name: Build admin
+        run: pnpm --filter @sancamobi/admin build
+        env:
+          VITE_FIREBASE_API_KEY: ${{ vars.SANCAMOBI_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: sancamobi.firebaseapp.com
+          VITE_FIREBASE_PROJECT_ID: sancamobi
+          VITE_FIREBASE_STORAGE_BUCKET: sancamobi.firebasestorage.app
+          VITE_FIREBASE_MESSAGING_SENDER_ID: "124451108176"
+          VITE_FIREBASE_APP_ID: "1:124451108176:web:c7ada8fc6e07de40ff2855"
+          VITE_ENV: production
+      - run: pnpm dlx firebase-tools@latest deploy --project sancamobi --non-interactive
+      - if: always()
+        run: rm -f "$GOOGLE_APPLICATION_CREDENTIALS"
