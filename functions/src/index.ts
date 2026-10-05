@@ -149,11 +149,70 @@ function requireAdmin(request: any): string {
   return id;
 }
 
+export const submitDriverCompliance = onCall(async request => {
+  const driverId = uid(request);
+  const existing = (await db.collection("driverCompliance").doc(driverId).get()).data() ?? {};
+  const payload = {
+    driverId,
+    countryCode: String(request.data?.countryCode ?? existing.countryCode ?? DEFAULT_BRAZIL_PROFILE.countryCode),
+    regionCode: String(request.data?.regionCode ?? existing.regionCode ?? ""),
+    cityCode: String(request.data?.cityCode ?? existing.cityCode ?? ""),
+    licenseNumber: String(request.data?.licenseNumber ?? existing.licenseNumber ?? "").slice(0, 32),
+    licenseValid: Boolean(request.data?.licenseValid ?? existing.licenseValid),
+    earDeclared: Boolean(request.data?.earDeclared ?? existing.earDeclared),
+    vehicleDocumentSubmitted: Boolean(request.data?.vehicleDocumentSubmitted ?? existing.vehicleDocumentSubmitted),
+    insuranceSubmitted: Boolean(request.data?.insuranceSubmitted ?? existing.insuranceSubmitted),
+    localAuthorizationSubmitted: Boolean(request.data?.localAuthorizationSubmitted ?? existing.localAuthorizationSubmitted),
+    reviewStatus: "PENDING_REVIEW",
+    updatedAt: FieldValue.serverTimestamp()
+  };
+  await db.collection("driverCompliance").doc(driverId).set(payload, { merge: true });
+  return { ok: true, reviewStatus: "PENDING_REVIEW" };
+});
+
+export const reviewDriverCompliance = onCall(async request => {
+  requireAdmin(request);
+  const driverId = String(request.data?.driverId ?? "");
+  if (!driverId) throw new HttpsError("invalid-argument", "driverId é obrigatório.");
+  const current = (await db.collection("driverCompliance").doc(driverId).get()).data() ?? {};
+  const compliance = {
+    ...current,
+    licenseValid: Boolean(request.data?.licenseValid),
+    earVerified: Boolean(request.data?.earVerified),
+    vehicleDocumentVerified: Boolean(request.data?.vehicleDocumentVerified),
+    insuranceVerified: Boolean(request.data?.insuranceVerified),
+    localAuthorizationVerified: Boolean(request.data?.localAuthorizationVerified),
+    reviewStatus: String(request.data?.approved ? "APPROVED" : "REJECTED"),
+    reviewedAt: FieldValue.serverTimestamp(),
+    reviewedBy: uid(request),
+    updatedAt: FieldValue.serverTimestamp()
+  };
+  await db.collection("driverCompliance").doc(driverId).set(compliance, { merge: true });
+  return { ok: true, reviewStatus: compliance.reviewStatus };
+});
+
+export const getDriverServiceEligibility = onCall(async request => {
+  const requester = uid(request);
+  const driverId = String(request.data?.driverId ?? requester);
+  if (driverId !== requester) requireAdmin(request);
+  const compliance = (await db.collection("driverCompliance").doc(driverId).get()).data() ?? {};
+  return {
+    passenger: passengerEligible(DEFAULT_BRAZIL_PROFILE, compliance),
+    complianceStatus: String(compliance.reviewStatus ?? "NOT_SUBMITTED")
+  };
+});
+
 export const setDriverApproval = onCall(async request => {
   requireAdmin(request);
   const driverId = String(request.data?.driverId ?? "");
   const approved = Boolean(request.data?.approved);
   if (!driverId) throw new HttpsError("invalid-argument", "driverId is required.");
+  if (approved) {
+    const compliance = (await db.collection("driverCompliance").doc(driverId).get()).data() ?? {};
+    if (!passengerEligible(DEFAULT_BRAZIL_PROFILE, compliance)) {
+      throw new HttpsError("failed-precondition", "Motorista não atende aos requisitos de conformidade para transporte de passageiros.");
+    }
+  }
   await db.collection("drivers").doc(driverId).update({
     approved,
     status: approved ? "APPROVED" : "REJECTED",
