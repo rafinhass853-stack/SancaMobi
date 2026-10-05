@@ -50,7 +50,29 @@ export const setDriverAvailability = onCall(async request => {
 export const updateDriverLocation = onCall(async request => {
   const id=uid(request), ref=db.collection("drivers").doc(id), snap=await ref.get();
   if(!snap.exists || snap.data()?.online !== true) throw new HttpsError("failed-precondition","Motorista está offline.");
-  await ref.update({latitude:n(request.data?.latitude,"latitude"),longitude:n(request.data?.longitude,"longitude"),locationUpdatedAt:FieldValue.serverTimestamp()});
+  const latitude = n(request.data?.latitude,"latitude");
+  const longitude = n(request.data?.longitude,"longitude");
+  const now = FieldValue.serverTimestamp();
+  await ref.update({latitude,longitude,locationUpdatedAt:now,updatedAt:now});
+
+  const activeRides = await db.collection("rides")
+    .where("driverId","==",id)
+    .where("status","in",["ACCEPTED","DRIVER_ARRIVING","DRIVER_ARRIVED","TRIP_STARTED"])
+    .limit(10)
+    .get();
+
+  if (!activeRides.empty) {
+    const batch = db.batch();
+    for (const ride of activeRides.docs) {
+      batch.update(ride.ref, {
+        driverLocation: { latitude, longitude },
+        driverLocationUpdatedAt: now,
+        updatedAt: now
+      });
+    }
+    await batch.commit();
+  }
+
   return {ok:true};
 });
 
@@ -144,4 +166,45 @@ export const savePricing = onCall(async request => {
   pricing.updatedAt = FieldValue.serverTimestamp();
   await db.collection("pricing").doc("default").set(pricing, { merge: true });
   return { ok: true };
+});
+
+
+export const submitRating = onCall(async request => {
+  const raterId = uid(request);
+  const rideId = String(request.data?.rideId ?? "");
+  const rating = Number(request.data?.rating);
+  const comment = request.data?.comment == null ? "" : String(request.data.comment).slice(0, 500);
+  if (!rideId || !Number.isInteger(rating) || rating < 1 || rating > 5) {
+    throw new HttpsError("invalid-argument", "rideId e nota de 1 a 5 são obrigatórios.");
+  }
+
+  const ride = await db.collection("rides").doc(rideId).get();
+  if (!ride.exists) throw new HttpsError("not-found", "Corrida não encontrada.");
+  const data = ride.data()!;
+  if (data.status !== "TRIP_COMPLETED") throw new HttpsError("failed-precondition", "A corrida ainda não foi concluída.");
+  if (data.passengerId !== raterId && data.driverId !== raterId) {
+    throw new HttpsError("permission-denied", "Você não participa desta corrida.");
+  }
+
+  const targetId = data.passengerId === raterId ? data.driverId : data.passengerId;
+  if (!targetId) throw new HttpsError("failed-precondition", "Participante da corrida não encontrado.");
+
+  const existing = await db.collection("ratings")
+    .where("rideId","==",rideId)
+    .where("raterId","==",raterId)
+    .limit(1)
+    .get();
+  if (!existing.empty) throw new HttpsError("already-exists", "Você já avaliou esta corrida.");
+
+  const ref = db.collection("ratings").doc();
+  await ref.set({
+    rideId,
+    raterId,
+    targetId,
+    rating,
+    comment,
+    createdAt: FieldValue.serverTimestamp()
+  });
+
+  return {ok:true, ratingId:ref.id};
 });
