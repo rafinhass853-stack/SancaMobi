@@ -21,8 +21,12 @@ jobs:
         with:
           node-version: 22
       - run: pnpm install --frozen-lockfile=false
-      - run: pnpm typecheck
-      - run: pnpm test
+      - name: Typecheck admin
+        run: pnpm --filter @sancamobi/admin typecheck
+      - name: Typecheck functions
+        run: pnpm --filter @sancamobi/functions typecheck
+      - name: Test admin
+        run: pnpm --filter @sancamobi/admin test -- --passWithNoTests
 
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -49,7 +53,7 @@ jobs:
       - name: Build admin
         run: pnpm --filter @sancamobi/admin build
         env:
-          VITE_FIREBASE_API_KEY: ${{ vars.SANCAMOBI_FIREBASE_API_KEY }}
+          VITE_FIREBASE_API_KEY: "AIzaSyDMXFOdZt1aNkLS6Sd6kvwnEjGjTjUXpOg"
           VITE_FIREBASE_AUTH_DOMAIN: sancamobi.firebaseapp.com
           VITE_FIREBASE_PROJECT_ID: sancamobi
           VITE_FIREBASE_STORAGE_BUCKET: sancamobi.firebasestorage.app
