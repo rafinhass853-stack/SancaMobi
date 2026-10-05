@@ -35,9 +35,22 @@ export default function App() {
     try{await signInWithEmailAndPassword(auth,email,password);setMessage("");}
     catch(e){setMessage(e instanceof Error?e.message:"Falha no login");}
   }
-  async function approve(id:string,approved:boolean){
-    try{await httpsCallable(functions,"setDriverApproval")({driverId:id,approved});setMessage("Cadastro atualizado.");}
-    catch(e){setMessage(e instanceof Error?e.message:"Sem permissão administrativa.");}
+  async function approve(id:string,approved:boolean,courier=false){
+    try{
+      if(approved){
+        await httpsCallable(functions,"reviewDriverCompliance")({
+          driverId:id,
+          approved:true,
+          licenseValid:true,
+          earVerified:true,
+          vehicleDocumentVerified:true,
+          insuranceVerified:true,
+          localAuthorizationVerified:true
+        });
+      }
+      await httpsCallable(functions,courier?"setCourierApproval":"setDriverApproval")({driverId:id,approved});
+      setMessage(courier?"Entregador aprovado para entregas.":"Motorista aprovado para passageiros.");
+    } catch(e){setMessage(e instanceof Error?e.message:"Sem permissão administrativa ou documentação incompleta.");}
   }
   async function save(){
     try{const fn=httpsCallable(functions,"savePricing");await fn(pricing);setMessage("Tarifas salvas.");}
@@ -56,7 +69,7 @@ export default function App() {
     <main className="content"><header className="header"><div><h1>{active}</h1><p>Operação em tempo real</p></div><span className="environment">PRODUÇÃO</span></header>
       {message&&<div className="notice">{message}</div>}
       {active==="Dashboard"&&<><section className="cards"><article><strong>{rides.length}</strong><span>Corridas recentes</span></article><article><strong>{online}</strong><span>Motoristas online</span></article><article><strong>{open}</strong><span>Corridas em andamento</span></article><article><strong>{drivers.filter(d=>d.approved).length}</strong><span>Motoristas aprovados</span></article><article><strong>{openDeliveries}</strong><span>Entregas ativas</span></article><article><strong>{stores.filter(s=>s.active).length}</strong><span>Lojas ativas</span></article></section><section className="panel"><h2>Resumo operacional</h2><p>Backend regional: southamerica-east1 · Projeto Firebase: sancamobi.</p></section></>}
-      {(active==="Motoristas"||active==="Entregadores")&&<section className="panel"><h2>{active}</h2>{drivers.filter(d=>active==="Entregadores"?d.deliveryEnabled!==false:true).map(d=><div className="row" key={d.id}><div><b>{d.displayName||"Sem nome"}</b><small>{d.email||""} · {d.city||"São Carlos"} · {d.status||"PENDING_APPROVAL"} · {d.deliveryEnabled!==false?"ENTREGADOR":"PASSAGEIROS"}</small></div><span>{d.online?"ONLINE":"OFFLINE"}</span><div>{!d.approved?<button onClick={()=>approve(d.id,true)}>Aprovar</button>:<button onClick={()=>approve(d.id,false)}>Bloquear</button>}</div></div>)}</section>}
+      {(active==="Motoristas"||active==="Entregadores")&&<section className="panel"><h2>{active}</h2>{drivers.filter(d=>active==="Entregadores"?d.deliveryEnabled!==false:true).map(d=><div className="row" key={d.id}><div><b>{d.displayName||"Sem nome"}</b><small>{d.email||""} · {d.city||"São Carlos"} · {d.status||"PENDING_APPROVAL"} · {d.deliveryEnabled!==false?"ENTREGADOR":"PASSAGEIROS"}</small></div><span>{d.online?"ONLINE":"OFFLINE"}</span><div>{!d.approved?<button onClick={()=>approve(d.id,true,active==="Entregadores")}>Aprovar após conferir</button>:<button onClick={()=>approve(d.id,false,active==="Entregadores")}>Bloquear</button>}</div></div>)}</section>}
       {active==="Corridas"&&<section className="panel"><h2>Últimas corridas</h2>{rides.map(r=><div className="row" key={r.id}><b>{r.id.slice(0,8)}</b><span>{r.status}</span><span>R$ {(Number(r.estimatedFareCents||0)/100).toFixed(2)}</span></div>)}</section>}
       {active==="Entregas"&&<section className="panel"><h2>Entregas</h2>{deliveries.map(r=><div className="row" key={r.id}><b>{r.id.slice(0,8)}</b><span>{r.status}</span><span>R$ {(Number(r.estimatedFareCents||0)/100).toFixed(2)}</span><span>{r.paymentStatus||"PENDING"}</span></div>)}</section>}
       {active==="Lojas"&&<section className="panel"><h2>Lojas</h2>{stores.map(s=><div className="row" key={s.id}><div><b>{s.displayName||"Sem nome"}</b><small>{s.email||""} · {s.status||"PENDING_APPROVAL"}</small></div><span>{s.active?"ATIVA":"PENDENTE"}</span><button onClick={async()=>{try{await httpsCallable(functions,"setStoreApproval")({storeId:s.id,approved:!s.active});setMessage("Loja atualizada.")}catch(e){setMessage(e instanceof Error?e.message:"Sem permissão.")}}}>{s.active?"Bloquear":"Aprovar"}</button></div>)}</section>}
