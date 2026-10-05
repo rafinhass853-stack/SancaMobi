@@ -323,6 +323,17 @@ export const submitRating = onCall(async request => {
 
 
 function assertParticipant(data:any,id:string){ if(data.storeId!==id && data.driverId!==id && data.courierId!==id && data.passengerId!==id) throw new HttpsError("permission-denied","Você não participa deste serviço."); }
+const CASHLESS_PAYMENT_METHODS = new Set(["PIX","CREDIT_CARD","DEBIT_CARD","GOOGLE_PAY","APPLE_PAY"]);
+function normalizePaymentMethod(value: unknown): string {
+  const method = String(value ?? "PIX").toUpperCase();
+  if (!CASHLESS_PAYMENT_METHODS.has(method)) throw new HttpsError("invalid-argument","A SancaMobi aceita somente pagamentos digitais.");
+  return method;
+}
+function deliveryRequestType(value: unknown): "STORE_ORDER"|"ON_DEMAND" {
+  const type = String(value ?? "ON_DEMAND").toUpperCase();
+  if (type !== "STORE_ORDER" && type !== "ON_DEMAND") throw new HttpsError("invalid-argument","Tipo de entrega inválido.");
+  return type;
+}
 function deliveryFare(distance:number, duration:number, p:any){
   const base=Number(p.deliveryBaseFareCents??700), perKm=Number(p.deliveryPerKmCents??180), perMinute=Number(p.deliveryPerMinuteCents??20), min=Number(p.deliveryMinimumFareCents??1200);
   return Math.max(Math.round(base+distance*perKm+duration*perMinute),min);
@@ -367,6 +378,8 @@ export const calculateDeliveryFare = onCall(async request => {
 
 export const createDelivery = onCall(async request => {
   const storeId=uid(request);
+  const paymentMethod = normalizePaymentMethod(request.data?.paymentMethod);
+  const requestType = deliveryRequestType(request.data?.requestType);
   const store=await db.collection("stores").doc(storeId).get();
   if(!store.exists||store.data()?.active!==true) throw new HttpsError("failed-precondition","Loja não aprovada ou inativa.");
   const pickup=request.data?.pickup, destination=request.data?.destination;
@@ -379,9 +392,9 @@ export const createDelivery = onCall(async request => {
   const couriers=await db.collection("drivers").where("online","==",true).where("approved","==",true).where("deliveryEnabled","==",true).limit(100).get();
   const candidates=couriers.docs.map(d=>({id:d.id,data:d.data()})).filter(x=>Number.isFinite(Number(x.data.latitude))&&Number.isFinite(Number(x.data.longitude))).map(x=>({id:x.id,distance:km(p.latitude,p.longitude,Number(x.data.latitude),Number(x.data.longitude))})).sort((a,b)=>a.distance-b.distance).slice(0,5);
   const ref=db.collection("deliveries").doc();
-  await ref.set({storeId,pickup:p,destination:d,status:candidates.length?"SEARCHING_COURIER":"NO_COURIER",estimatedDistanceKm:distance,estimatedDurationMin:duration,estimatedFareCents:fare,paymentStatus:"PENDING",candidateCourierIds:candidates.map(x=>x.id),createdAt:FieldValue.serverTimestamp(),updatedAt:FieldValue.serverTimestamp()});
-  if(candidates.length){const batch=db.batch();for(const x of candidates)batch.set(db.collection("serviceOffers").doc(ref.id+"_"+x.id),{serviceId:ref.id,serviceType:"DELIVERY",courierId:x.id,status:"OFFERED",distanceToPickupKm:x.distance,createdAt:FieldValue.serverTimestamp()});await batch.commit();}
-  return {deliveryId:ref.id,status:candidates.length?"SEARCHING_COURIER":"NO_COURIER",fareCents:fare,candidates:candidates.length};
+  await ref.set({storeId,pickup:p,destination:d,requestType,paymentMethod,status:"PAYMENT_PENDING",estimatedDistanceKm:distance,estimatedDurationMin:duration,estimatedFareCents:fare,paymentStatus:"PENDING",candidateCourierIds:candidates.map(x=>x.id),createdAt:FieldValue.serverTimestamp(),updatedAt:FieldValue.serverTimestamp()});
+  if(candidates.length){ /* dispatch starts after confirmed payment */ }
+  return {deliveryId:ref.id,status:"PAYMENT_PENDING",fareCents:fare,paymentMethod,requestType,candidates:candidates.length};
 });
 
 export const acceptDelivery = onCall(async request => {
@@ -392,6 +405,7 @@ export const acceptDelivery = onCall(async request => {
     const [deliverySnap,offerSnap,driverSnap]=await Promise.all([tx.get(ref),tx.get(offer),tx.get(driver)]);
     if(!deliverySnap.exists||!offerSnap.exists) throw new HttpsError("not-found","Entrega ou oferta não encontrada.");
     if(driverSnap.data()?.approved!==true||driverSnap.data()?.online!==true||driverSnap.data()?.deliveryEnabled!==true) throw new HttpsError("failed-precondition","Entregador indisponível.");
+    if(deliverySnap.data()?.paymentStatus !== "approved" && deliverySnap.data()?.paymentStatus !== "APPROVED") throw new HttpsError("failed-precondition","Pagamento da entrega ainda não foi aprovado.");
     if(!["SEARCHING_COURIER","OFFERED"].includes(String(deliverySnap.data()?.status))) throw new HttpsError("failed-precondition","Entrega não está disponível.");
     tx.update(ref,{courierId,status:"ACCEPTED",updatedAt:FieldValue.serverTimestamp()});
     tx.update(offer,{status:"ACCEPTED",acceptedAt:FieldValue.serverTimestamp()});
@@ -523,13 +537,15 @@ export const updateFoodOrderStatus = onCall(async request => {
 
 export const createMercadoPagoPix = onCall({ secrets: [mercadoPagoAccessToken] }, async request => {
   const requester=uid(request), serviceId=String(request.data?.serviceId??""), serviceType=String(request.data?.serviceType??"");
+  const paymentMethod = normalizePaymentMethod(request.data?.paymentMethod);
   if(!["RIDE","DELIVERY"].includes(serviceType)||!serviceId) throw new HttpsError("invalid-argument","serviceId e serviceType são obrigatórios.");
   const collectionName=serviceType==="RIDE"?"rides":"deliveries";
   const snap=await db.collection(collectionName).doc(serviceId).get();
   if(!snap.exists) throw new HttpsError("not-found","Serviço não encontrado.");
   const data=snap.data()!;
   assertParticipant(data,requester);
-  if(data.paymentStatus==="APPROVED") return {ok:true,status:"APPROVED",paymentId:data.paymentId};
+  if(data.paymentStatus==="APPROVED" || data.paymentStatus==="approved") return {ok:true,status:"APPROVED",paymentId:data.paymentId};
+  if(paymentMethod !== "PIX") throw new HttpsError("failed-precondition","Checkout de cartão/carteira digital ainda precisa do SDK Mercado Pago no app.");
   const amountCents=Number(data.estimatedFareCents??data.totalCents??0);
   if(!Number.isInteger(amountCents)||amountCents<100) throw new HttpsError("failed-precondition","Valor inválido.");
 
@@ -574,6 +590,7 @@ export const createMercadoPagoPix = onCall({ secrets: [mercadoPagoAccessToken] }
 
   await db.collection("paymentTransactions").doc(paymentId||String(payload.id)).set({
     paymentId,
+    paymentMethod,
     orderId:String(payload.id??""),
     serviceId,
     serviceType,
@@ -588,6 +605,7 @@ export const createMercadoPagoPix = onCall({ secrets: [mercadoPagoAccessToken] }
   });
   await db.collection(collectionName).doc(serviceId).update({
     paymentId,
+    paymentMethod,
     paymentOrderId:String(payload.id??""),
     paymentStatus:status,
     updatedAt:FieldValue.serverTimestamp()
@@ -639,6 +657,21 @@ export const mercadoPagoWebhook = onRequest({ secrets: [mercadoPagoAccessToken] 
     const serviceType=String(txData.serviceType), serviceId=String(txData.serviceId);
     const collectionName=serviceType==="RIDE"?"rides":"deliveries";
     await db.collection(collectionName).doc(serviceId).update({paymentStatus:status,updatedAt:FieldValue.serverTimestamp()});
+    if (serviceType === "DELIVERY" && ["approved","APPROVED"].includes(status)) {
+      const deliverySnap = await db.collection("deliveries").doc(serviceId).get();
+      const delivery = deliverySnap.data();
+      if (delivery && ["PAYMENT_PENDING","NO_COURIER"].includes(String(delivery.status))) {
+        const pickup = delivery.pickup;
+        const couriers = await db.collection("drivers").where("online","==",true).where("approved","==",true).where("deliveryEnabled","==",true).limit(100).get();
+        const candidates = couriers.docs.filter(d=>Number.isFinite(Number(d.data().latitude))&&Number.isFinite(Number(d.data().longitude)))
+          .map(d=>({id:d.id,distance:km(Number(pickup.latitude),Number(pickup.longitude),Number(d.data().latitude),Number(d.data().longitude))}))
+          .sort((a,b)=>a.distance-b.distance).slice(0,5);
+        const batch=db.batch();
+        for(const c of candidates) batch.set(db.collection("serviceOffers").doc(serviceId+"_"+c.id),{serviceId,serviceType:"DELIVERY",courierId:c.id,status:"OFFERED",distanceToPickupKm:c.distance,createdAt:FieldValue.serverTimestamp()});
+        batch.update(deliverySnap.ref,{status:candidates.length?"SEARCHING_COURIER":"NO_COURIER",candidateCourierIds:candidates.map(c=>c.id),updatedAt:FieldValue.serverTimestamp()});
+        await batch.commit();
+      }
+    }
     res.status(200).send("ok");
   } catch(error) {
     console.error("Mercado Pago webhook error",error);

@@ -74,6 +74,8 @@ export interface RideOffer {
 
 
 export type ServiceType = "RIDE" | "DELIVERY";
+export type PaymentMethod = "PIX" | "CREDIT_CARD" | "DEBIT_CARD" | "GOOGLE_PAY" | "APPLE_PAY";
+export type DeliveryRequestType = "STORE_ORDER" | "ON_DEMAND";
 export type DeliveryStatus =
   | "SEARCHING_COURIER" | "OFFERED" | "ACCEPTED" | "GOING_TO_PICKUP"
   | "ARRIVED_PICKUP" | "PICKED_UP" | "IN_DELIVERY" | "ARRIVED_DESTINATION"
@@ -100,6 +102,8 @@ export interface Delivery {
   estimatedDurationMin: number;
   estimatedFareCents: number;
   paymentStatus: string;
+  paymentMethod?: PaymentMethod;
+  requestType?: DeliveryRequestType;
   createdAt: string;
   updatedAt: string;
 }
