@@ -64,6 +64,7 @@ export default function PassengerHome() {
   const [activeRideId,setActiveRideId]=useState<string | null>(null);
   const [ride,setRide]=useState<Ride | null>(null);
   const [message,setMessage]=useState("Toque no mapa para escolher o destino.");
+  const [pixCode,setPixCode]=useState("");
   const paymentMethod: PaymentMethod = "PIX";
 
   useEffect(() => onAuthStateChanged(auth,user => setAuthenticated(Boolean(user))),[]);
@@ -165,6 +166,7 @@ export default function PassengerHome() {
         paymentMethod
       });
       const data = result.data as {qrCode?:string;ticketUrl?:string;status:string};
+      setPixCode(data.qrCode ?? "");
       if (data.status === "approved" || data.status === "APPROVED") {
         setMessage("Pagamento aprovado. Procurando motorista...");
       } else {
@@ -232,6 +234,7 @@ export default function PassengerHome() {
         </Text>
         {ride.driverLocation && <Text style={styles.live}>● Motorista localizado em tempo real</Text>}
         {ride.paymentStatus !== "approved" && ride.paymentStatus !== "APPROVED" && !["CANCELLED","EXPIRED"].includes(ride.status) && <Pressable style={styles.primary} onPress={payRide}><Text style={styles.primaryText}>Pagar corrida via Mercado Pago (Pix)</Text></Pressable>}
+        {pixCode && <Text selectable style={styles.pixCode}>{pixCode}</Text>}
         {!["TRIP_COMPLETED","CANCELLED","EXPIRED","NO_DRIVER"].includes(ride.status) &&
           <Pressable style={styles.cancel} onPress={cancelRide}><Text style={styles.cancelText}>Cancelar corrida</Text></Pressable>}
         {ride.status === "TRIP_COMPLETED" &&
@@ -280,5 +283,6 @@ const styles=StyleSheet.create({
   primary:{backgroundColor:"#111",padding:15,borderRadius:14,alignItems:"center"},
   primaryText:{color:"#fff",fontWeight:"800"},
   cancel:{borderWidth:1,borderColor:"#ddd",padding:14,borderRadius:14,alignItems:"center"},
-  cancelText:{fontWeight:"700"}
+  cancelText:{fontWeight:"700"},
+  pixCode:{fontSize:11,color:"#333",backgroundColor:"#f1f1f1",padding:10,borderRadius:10}
 });
