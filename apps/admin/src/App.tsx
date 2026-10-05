@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { signInWithEmailAndPassword, onAuthStateChanged } from "firebase/auth";
 import { collection, doc, onSnapshot, query, orderBy, limit } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
-import { auth, db } from "./lib/firebase";
+import { auth, db, functions } from "./lib/firebase";
 
 type Driver = { id:string; displayName?:string; email?:string; status?:string; approved?:boolean; online?:boolean; city?:string };
 
@@ -30,11 +30,11 @@ export default function App() {
     catch(e){setMessage(e instanceof Error?e.message:"Falha no login");}
   }
   async function approve(id:string,approved:boolean){
-    try{await httpsCallable(auth.app,"setDriverApproval")({driverId:id,approved});setMessage("Cadastro atualizado.");}
+    try{await httpsCallable(functions,"setDriverApproval")({driverId:id,approved});setMessage("Cadastro atualizado.");}
     catch(e){setMessage(e instanceof Error?e.message:"Sem permissão administrativa.");}
   }
   async function save(){
-    try{const fn=httpsCallable(auth.app,"savePricing");await fn(pricing);setMessage("Tarifas salvas.");}
+    try{const fn=httpsCallable(functions,"savePricing");await fn(pricing);setMessage("Tarifas salvas.");}
     catch(e){setMessage(e instanceof Error?e.message:"Sem permissão administrativa.");}
   }
 
