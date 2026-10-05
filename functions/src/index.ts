@@ -30,7 +30,7 @@ export const healthCheck = onCall(() => ({ ok:true, service:"sancamobi-functions
 
 export const ensurePassengerProfile = onCall(async request => {
   const id=uid(request), name=String(request.data?.displayName ?? request.auth?.token.name ?? "Passageiro");
-  await db.collection("passengers").doc(id).set({userId:id,displayName:name,email:request.auth?.token.email ?? null,active:true,updatedAt:FieldValue.serverTimestamp()},{merge:true});
+  await db.collection("passengers").doc(id).set({userId:id,displayName:name,email:request.auth?.token.email ?? null,active:false,status:"PENDING_APPROVAL",updatedAt:FieldValue.serverTimestamp()},{merge:true});
   await db.collection("users").doc(id).set({role:"PASSENGER",displayName:name,email:request.auth?.token.email ?? null,updatedAt:FieldValue.serverTimestamp()},{merge:true});
   return {ok:true};
 });
@@ -40,6 +40,19 @@ export const ensureDriverProfile = onCall(async request => {
   await db.collection("drivers").doc(id).set({userId:id,displayName:name,email:request.auth?.token.email ?? null,status:"PENDING_APPROVAL",online:false,city:"São Carlos",approved:false,deliveryEnabled:true,updatedAt:FieldValue.serverTimestamp()},{merge:true});
   await db.collection("users").doc(id).set({role:"DRIVER",roles:["DRIVER"],displayName:name,email:request.auth?.token.email ?? null,updatedAt:FieldValue.serverTimestamp()},{merge:true});
   return {ok:true,status:"PENDING_APPROVAL"};
+});
+
+export const setPassengerApproval = onCall(async request => {
+  requireAdmin(request);
+  const passengerId = String(request.data?.passengerId ?? "");
+  const approved = Boolean(request.data?.approved);
+  if (!passengerId) throw new HttpsError("invalid-argument", "passengerId is required.");
+  await db.collection("passengers").doc(passengerId).update({
+    active: approved,
+    status: approved ? "ACTIVE" : "BLOCKED",
+    updatedAt: FieldValue.serverTimestamp()
+  });
+  return { ok: true, passengerId, approved };
 });
 
 export const setDriverAvailability = onCall(async request => {
@@ -99,6 +112,8 @@ export const calculateRideFare = onCall(async request => {
 
 export const createRide = onCall(async request => {
   const passengerId=uid(request);
+  const passenger=await db.collection("passengers").doc(passengerId).get();
+  if(!passenger.exists || passenger.data()?.active!==true) throw new HttpsError("failed-precondition","Cadastro do passageiro aguardando aprovação.");
   const pickup={latitude:n(request.data?.pickup?.latitude,"pickup.latitude"),longitude:n(request.data?.pickup?.longitude,"pickup.longitude")};
   const destination={latitude:n(request.data?.destination?.latitude,"destination.latitude"),longitude:n(request.data?.destination?.longitude,"destination.longitude")};
   const distance=n(request.data?.estimatedDistanceKm,"estimatedDistanceKm"), duration=n(request.data?.estimatedDurationMin,"estimatedDurationMin");
