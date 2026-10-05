@@ -59,6 +59,8 @@ jobs:
           VITE_FIREBASE_MESSAGING_SENDER_ID: "124451108176"
           VITE_FIREBASE_APP_ID: "1:124451108176:web:cb28814a7beb7ffdff2855"
           VITE_ENV: production
+      - name: Build functions
+        run: pnpm --filter @sancamobi/functions build
       - run: pnpm dlx firebase-tools@latest deploy --project sancamobi --non-interactive
       - if: always()
         run: rm -f "$GOOGLE_APPLICATION_CREDENTIALS"
