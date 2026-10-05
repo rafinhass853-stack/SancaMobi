@@ -4,7 +4,7 @@ import { defineSecret } from "firebase-functions/params";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { initializeApp } from "firebase-admin/app";
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { DEFAULT_BRAZIL_PROFILE, passengerEligible } from "./regulatory";
+import { DEFAULT_BRAZIL_PROFILE, deliveryEligible, passengerEligible } from "./regulatory";
 
 initializeApp();
 setGlobalOptions({ region: "southamerica-east1", maxInstances: 10 });
@@ -203,6 +203,27 @@ export const getDriverServiceEligibility = onCall(async request => {
     passenger: passengerEligible(DEFAULT_BRAZIL_PROFILE, compliance),
     complianceStatus: String(compliance.reviewStatus ?? "NOT_SUBMITTED")
   };
+});
+
+export const setCourierApproval = onCall(async request => {
+  requireAdmin(request);
+  const driverId = String(request.data?.driverId ?? "");
+  const approved = Boolean(request.data?.approved);
+  if (!driverId) throw new HttpsError("invalid-argument", "driverId is required.");
+  if (approved) {
+    const compliance = (await db.collection("driverCompliance").doc(driverId).get()).data() ?? {};
+    if (!deliveryEligible(DEFAULT_BRAZIL_PROFILE, compliance)) {
+      throw new HttpsError("failed-precondition", "Entregador não atende aos requisitos de conformidade para entregas.");
+    }
+  }
+  await db.collection("drivers").doc(driverId).update({
+    approved,
+    status: approved ? "APPROVED" : "REJECTED",
+    deliveryEnabled: true,
+    online: false,
+    updatedAt: FieldValue.serverTimestamp()
+  });
+  return { ok: true, driverId, approved };
 });
 
 export const setDriverApproval = onCall(async request => {
