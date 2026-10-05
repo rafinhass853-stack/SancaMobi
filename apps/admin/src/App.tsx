@@ -18,6 +18,7 @@ export default function App() {
   const [stores,setStores]=useState<Store[]>([]);
   const [pricing,setPricing]=useState({baseFareCents:600,perKmCents:220,perMinuteCents:35,minimumFareCents:1000,cancellationFeeCents:0,commissionPercent:20});
   const [message,setMessage]=useState("");
+  const [showGuide,setShowGuide]=useState(false);
 
   useEffect(()=>onAuthStateChanged(auth,setUser),[]);
   useEffect(()=>{
@@ -51,7 +52,7 @@ export default function App() {
   const modules=["Dashboard","Corridas","Entregas","Motoristas","Lojas","Passageiros","Veículos","Financeiro","Tarifas","Suporte"];
 
   return <div className="shell">
-    <aside className="sidebar"><div className="brand">SancaMobi</div><div className="brand-subtitle">São Carlos</div><nav>{modules.map(m=><button key={m} className={active===m?"nav-item active":"nav-item"} onClick={()=>setActive(m)}>{m}</button>)}</nav><button className="logout" onClick={()=>auth.signOut()}>Sair</button></aside>
+    <aside className="sidebar"><div className="brand">SancaMobi</div><div className="brand-subtitle">São Carlos</div><nav>{modules.map(m=><button key={m} className={active===m?"nav-item active":"nav-item"} onClick={()=>setActive(m)}>{m}</button>)}<button className="nav-item guide-button" onClick={()=>setShowGuide(true)}>Como funciona</button></nav><button className="logout" onClick={()=>auth.signOut()}>Sair</button></aside>
     <main className="content"><header className="header"><div><h1>{active}</h1><p>Operação em tempo real</p></div><span className="environment">PRODUÇÃO</span></header>
       {message&&<div className="notice">{message}</div>}
       {active==="Dashboard"&&<><section className="cards"><article><strong>{rides.length}</strong><span>Corridas recentes</span></article><article><strong>{online}</strong><span>Motoristas online</span></article><article><strong>{open}</strong><span>Corridas em andamento</span></article><article><strong>{drivers.filter(d=>d.approved).length}</strong><span>Motoristas aprovados</span></article><article><strong>{openDeliveries}</strong><span>Entregas ativas</span></article><article><strong>{stores.filter(s=>s.active).length}</strong><span>Lojas ativas</span></article></section><section className="panel"><h2>Resumo operacional</h2><p>Backend regional: southamerica-east1 · Projeto Firebase: sancamobi.</p></section></>}
