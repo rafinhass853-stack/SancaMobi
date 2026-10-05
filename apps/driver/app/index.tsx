@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Alert, Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import * as Location from "expo-location";
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from "firebase/auth";
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged } from "firebase/auth";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import { auth, db, functions } from "../lib/firebase";
@@ -9,7 +9,7 @@ import { auth, db, functions } from "../lib/firebase";
 type Offer={id:string;rideId:string;distanceToPickupKm?:number;status:string};
 
 export default function DriverHome(){
-  const [email,setEmail]=useState(""),[password,setPassword]=useState(""),[online,setOnline]=useState(false),[busy,setBusy]=useState(false),[offers,setOffers]=useState<Offer[]>([]);
+  const [email,setEmail]=useState(""),[password,setPassword]=useState(""),[online,setOnline]=useState(false),[busy,setBusy]=useState(false),[offers,setOffers]=useState<Offer[]>([]),[authenticated,setAuthenticated]=useState(Boolean(auth.currentUser));
   async function authenticate(){
     setBusy(true);
     try{
@@ -49,7 +49,7 @@ export default function DriverHome(){
     catch(e){Alert.alert("Corrida",e instanceof Error?e.message:"A corrida não está mais disponível.");}
   }
   return <View style={styles.container}><Text style={styles.logo}>SancaMobi</Text><Text style={styles.subtitle}>Painel do motorista</Text>
-    {!auth.currentUser?<><TextInput style={styles.input} placeholder="E-mail" autoCapitalize="none" value={email} onChangeText={setEmail}/><TextInput style={styles.input} placeholder="Senha" secureTextEntry value={password} onChangeText={setPassword}/><Pressable style={styles.primary} onPress={authenticate} disabled={busy}><Text style={styles.primaryText}>{busy?"Entrando...":"Entrar / Cadastrar"}</Text></Pressable></>:<>
+    {!authenticated?<><TextInput style={styles.input} placeholder="E-mail" autoCapitalize="none" value={email} onChangeText={setEmail}/><TextInput style={styles.input} placeholder="Senha" secureTextEntry value={password} onChangeText={setPassword}/><Pressable style={styles.primary} onPress={authenticate} disabled={busy}><Text style={styles.primaryText}>{busy?"Entrando...":"Entrar / Cadastrar"}</Text></Pressable></>:<>
       <View style={styles.row}><Text>Online</Text><Switch value={online} onValueChange={toggleOnline}/></View>
       <Text style={styles.section}>Ofertas disponíveis</Text>
       {offers.length===0?<Text>Nenhuma oferta no momento.</Text>:offers.map(o=><View style={styles.offer} key={o.id}><View><Text style={styles.offerTitle}>Nova corrida</Text><Text>Até {Number(o.distanceToPickupKm??0).toFixed(1)} km do embarque</Text></View><Pressable style={styles.accept} onPress={()=>accept(o.rideId)}><Text style={styles.primaryText}>Aceitar</Text></Pressable></View>)}
