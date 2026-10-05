@@ -61,8 +61,7 @@ jobs:
           VITE_ENV: production
       - name: Build functions
         run: pnpm --filter @sancamobi/functions build
-      - name: Configure Functions artifact cleanup policy
-        run: pnpm dlx firebase-tools@latest functions:artifacts:setpolicy --project sancamobi --location southamerica-east1 --days 7 --non-interactive
-      - run: pnpm dlx firebase-tools@latest deploy --project sancamobi --non-interactive
+      - name: Deploy Firebase
+        run: pnpm dlx firebase-tools@latest deploy --project sancamobi --non-interactive --force
       - if: always()
         run: rm -f "$GOOGLE_APPLICATION_CREDENTIALS"
