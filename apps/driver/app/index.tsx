@@ -1,217 +1,27 @@
-import { useEffect, useState } from "react";
-import { Alert, Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import {useEffect,useState} from "react";
+import {Alert,Pressable,StyleSheet,Switch,Text,TextInput,View} from "react-native";
 import * as Location from "expo-location";
-import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword } from "firebase/auth";
-import { collection, doc, onSnapshot, query, where } from "firebase/firestore";
-import { httpsCallable } from "firebase/functions";
-import { auth, db, functions } from "../lib/firebase";
-
-type Offer={id:string;rideId:string;distanceToPickupKm?:number;status:string};
-type Ride={status:string;estimatedFareCents?:number;destination?:{latitude:number;longitude:number}};
-
-const statusLabel: Record<string,string> = {
-  ACCEPTED:"Aceita — siga para o embarque",
-  DRIVER_ARRIVING:"A caminho do embarque",
-  DRIVER_ARRIVED:"Cheguei ao embarque",
-  TRIP_STARTED:"Corrida em andamento",
-  TRIP_COMPLETED:"Corrida concluída",
-  CANCELLED:"Corrida cancelada"
-};
-
-const nextStatus: Record<string,string> = {
-  ACCEPTED:"DRIVER_ARRIVING",
-  DRIVER_ARRIVING:"DRIVER_ARRIVED",
-  DRIVER_ARRIVED:"TRIP_STARTED",
-  TRIP_STARTED:"TRIP_COMPLETED"
-};
-
+import {createUserWithEmailAndPassword,onAuthStateChanged,signInWithEmailAndPassword} from "firebase/auth";
+import {collection,doc,onSnapshot,query,where} from "firebase/firestore";
+import {httpsCallable} from "firebase/functions";
+import {auth,db,functions} from "../lib/firebase";
+type Offer={id:string;rideId?:string;serviceId?:string;serviceType:"RIDE"|"DELIVERY";distanceToPickupKm?:number;status:string};
+type Service={status:string;estimatedFareCents?:number;destination?:{latitude:number;longitude:number}};
+const rideNext:Record<string,string>={ACCEPTED:"DRIVER_ARRIVING",DRIVER_ARRIVING:"DRIVER_ARRIVED",DRIVER_ARRIVED:"TRIP_STARTED",TRIP_STARTED:"TRIP_COMPLETED"};
+const deliveryNext:Record<string,string>={ACCEPTED:"GOING_TO_PICKUP",GOING_TO_PICKUP:"ARRIVED_PICKUP",ARRIVED_PICKUP:"PICKED_UP",PICKED_UP:"IN_DELIVERY",IN_DELIVERY:"ARRIVED_DESTINATION",ARRIVED_DESTINATION:"DELIVERED"};
+const labels:Record<string,string>={DRIVER_ARRIVING:"A caminho do embarque",DRIVER_ARRIVED:"Cheguei ao embarque",TRIP_STARTED:"Corrida em andamento",TRIP_COMPLETED:"Corrida concluída",GOING_TO_PICKUP:"A caminho da coleta",ARRIVED_PICKUP:"Cheguei à coleta",PICKED_UP:"Pedido coletado",IN_DELIVERY:"Entrega em andamento",ARRIVED_DESTINATION:"Cheguei ao destino",DELIVERED:"Entrega concluída"};
 export default function DriverHome(){
-  const [email,setEmail]=useState("");
-  const [password,setPassword]=useState("");
-  const [online,setOnline]=useState(false);
-  const [busy,setBusy]=useState(false);
-  const [offers,setOffers]=useState<Offer[]>([]);
-  const [authenticated,setAuthenticated]=useState(Boolean(auth.currentUser));
-  const [activeRideId,setActiveRideId]=useState<string|null>(null);
-  const [ride,setRide]=useState<Ride|null>(null);
-
-  useEffect(() => onAuthStateChanged(auth,user => setAuthenticated(Boolean(user))),[]);
-
-  useEffect(()=>{
-    const user=auth.currentUser;
-    if(!user){setOffers([]);return;}
-    const q=query(
-      collection(db,"rideOffers"),
-      where("driverId","==",user.uid),
-      where("status","==","OFFERED")
-    );
-    return onSnapshot(q,s=>setOffers(s.docs.map(d=>({id:d.id,...d.data()} as Offer))),e=>Alert.alert("Ofertas",e.message));
-  },[authenticated]);
-
-  useEffect(()=>{
-    if(!activeRideId){setRide(null);return;}
-    return onSnapshot(doc(db,"rides",activeRideId),snap=>{
-      if(!snap.exists()){setRide(null);return;}
-      setRide(snap.data() as Ride);
-    },e=>Alert.alert("Corrida",e.message));
-  },[activeRideId]);
-
-  useEffect(()=>{
-    if(!online || !auth.currentUser)return;
-    let active=true;
-    const send=async()=>{
-      if(!active)return;
-      try{
-        const loc=await Location.getCurrentPositionAsync({accuracy:Location.Accuracy.High});
-        await httpsCallable(functions,"updateDriverLocation")({
-          latitude:loc.coords.latitude,
-          longitude:loc.coords.longitude
-        });
-      }catch{}
-    };
-    void send();
-    const interval=setInterval(send,10000);
-    return()=>{active=false;clearInterval(interval);};
-  },[online]);
-
-  async function authenticate(){
-    if(!email || password.length<6){
-      Alert.alert("Dados inválidos","Informe e-mail e senha com pelo menos 6 caracteres.");
-      return;
-    }
-    setBusy(true);
-    try{
-      let signedIn=false;
-      try{await signInWithEmailAndPassword(auth,email.trim(),password);signedIn=true;}
-      catch{}
-      if(!signedIn) await createUserWithEmailAndPassword(auth,email.trim(),password);
-      await httpsCallable(functions,"ensureDriverProfile")({
-        displayName:email.trim().split("@")[0]
-      });
-    }catch(e){
-      Alert.alert("SancaMobi",e instanceof Error?e.message:"Falha na autenticação.");
-    }finally{setBusy(false);}
-  }
-
-  async function toggleOnline(value:boolean){
-    if(!auth.currentUser)return;
-    try{
-      if(value){
-        const p=await Location.requestForegroundPermissionsAsync();
-        if(p.status!=="granted")throw new Error("A localização é necessária para ficar online.");
-        const loc=await Location.getCurrentPositionAsync({accuracy:Location.Accuracy.High});
-        await httpsCallable(functions,"setDriverAvailability")({
-          online:true,
-          latitude:loc.coords.latitude,
-          longitude:loc.coords.longitude
-        });
-      }else{
-        await httpsCallable(functions,"setDriverAvailability")({online:false});
-      }
-      setOnline(value);
-    }catch(e){
-      Alert.alert("SancaMobi",e instanceof Error?e.message:"Não foi possível alterar o status.");
-    }
-  }
-
-  async function accept(rideId:string){
-    try{
-      await httpsCallable(functions,"acceptRide")({rideId});
-      setActiveRideId(rideId);
-      setOffers(current=>current.filter(o=>o.rideId!==rideId));
-    }catch(e){
-      Alert.alert("Corrida",e instanceof Error?e.message:"A corrida não está mais disponível.");
-    }
-  }
-
-  async function advanceRide(){
-    if(!activeRideId || !ride) return;
-    const status=nextStatus[ride.status];
-    if(!status)return;
-    setBusy(true);
-    try{
-      await httpsCallable(functions,"updateRideStatus")({rideId:activeRideId,status});
-      if(status==="TRIP_COMPLETED") {
-        Alert.alert("Corrida concluída","Obrigado por dirigir com o SancaMobi.");
-      }
-    }catch(e){
-      Alert.alert("Corrida",e instanceof Error?e.message:"Não foi possível atualizar a corrida.");
-    }finally{setBusy(false);}
-  }
-
-  async function cancelRide(){
-    if(!activeRideId)return;
-    try{
-      await httpsCallable(functions,"updateRideStatus")({rideId:activeRideId,status:"CANCELLED"});
-      setActiveRideId(null);
-    }catch(e){
-      Alert.alert("Corrida",e instanceof Error?e.message:"Não foi possível cancelar.");
-    }
-  }
-
-  if(!authenticated){
-    return <View style={styles.auth}>
-      <Text style={styles.logo}>SancaMobi</Text>
-      <Text style={styles.subtitle}>Motorista</Text>
-      <TextInput style={styles.input} placeholder="E-mail" autoCapitalize="none" keyboardType="email-address" value={email} onChangeText={setEmail}/>
-      <TextInput style={styles.input} placeholder="Senha" secureTextEntry value={password} onChangeText={setPassword}/>
-      <Pressable style={styles.primary} onPress={authenticate} disabled={busy}>
-        <Text style={styles.primaryText}>{busy?"Entrando...":"Entrar / Criar conta"}</Text>
-      </Pressable>
-    </View>;
-  }
-
-  return <View style={styles.container}>
-    <View style={styles.header}>
-      <View><Text style={styles.logoSmall}>SancaMobi</Text><Text style={styles.small}>Motorista</Text></View>
-      <Pressable onPress={()=>auth.signOut()}><Text style={styles.logout}>Sair</Text></Pressable>
-    </View>
-
-    <View style={styles.card}>
-      <View style={styles.row}><View><Text style={styles.title}>Disponibilidade</Text><Text style={styles.small}>Só recebe chamadas quando estiver online</Text></View><Switch value={online} onValueChange={toggleOnline}/></View>
-    </View>
-
-    {activeRideId && ride ? <View style={styles.card}>
-      <Text style={styles.title}>{statusLabel[ride.status] ?? ride.status}</Text>
-      <Text style={styles.fare}>R$ {((ride.estimatedFareCents??0)/100).toFixed(2)}</Text>
-      <Text style={styles.small}>Siga as etapas da corrida para manter o passageiro atualizado.</Text>
-      {nextStatus[ride.status] && <Pressable style={styles.primary} onPress={advanceRide} disabled={busy}>
-        <Text style={styles.primaryText}>{nextStatus[ride.status]==="DRIVER_ARRIVING"?"Iniciar deslocamento":nextStatus[ride.status]==="DRIVER_ARRIVED"?"Cheguei ao embarque":nextStatus[ride.status]==="TRIP_STARTED"?"Iniciar corrida":"Finalizar corrida"}</Text>
-      </Pressable>}
-      {["ACCEPTED","DRIVER_ARRIVING","DRIVER_ARRIVED"].includes(ride.status) &&
-        <Pressable style={styles.secondary} onPress={cancelRide}><Text>Cancelar corrida</Text></Pressable>}
-      {ride.status==="TRIP_COMPLETED" &&
-        <Pressable style={styles.secondary} onPress={()=>Alert.alert("Avaliação","A avaliação do passageiro será disponibilizada no próximo módulo.")}><Text>Avaliar passageiro</Text></Pressable>}
-    </View> : <View style={styles.card}>
-      <Text style={styles.title}>Ofertas disponíveis</Text>
-      {offers.length===0?<Text style={styles.small}>Nenhuma oferta no momento.</Text>:offers.map(o=>
-        <View style={styles.offer} key={o.id}>
-          <View style={{flex:1}}><Text style={styles.offerTitle}>Nova corrida</Text><Text style={styles.small}>Aproximadamente {Number(o.distanceToPickupKm??0).toFixed(1)} km até o embarque</Text></View>
-          <Pressable style={styles.accept} onPress={()=>accept(o.rideId)}><Text style={styles.primaryText}>Aceitar</Text></Pressable>
-        </View>
-      )}
-    </View>}
-  </View>;
+ const[email,setEmail]=useState("");const[password,setPassword]=useState("");const[online,setOnline]=useState(false);const[busy,setBusy]=useState(false);const[authd,setAuthd]=useState(Boolean(auth.currentUser));const[offers,setOffers]=useState<Offer[]>([]);const[activeId,setActiveId]=useState<string|null>(null);const[activeType,setActiveType]=useState<"RIDE"|"DELIVERY"|null>(null);const[service,setService]=useState<Service|null>(null);
+ useEffect(()=>onAuthStateChanged(auth,u=>setAuthd(Boolean(u))),[]);
+ useEffect(()=>{if(!authd||!auth.currentUser){setOffers([]);return}const q=query(collection(db,"rideOffers"),where("driverId","==",auth.currentUser.uid),where("status","==","OFFERED"));const a=onSnapshot(q,s=>setOffers(s.docs.map(d=>({id:d.id,serviceType:"RIDE",...d.data()} as Offer))));const q2=query(collection(db,"serviceOffers"),where("courierId","==",auth.currentUser.uid),where("status","==","OFFERED"));const b=onSnapshot(q2,s=>setOffers(old=>[...old.filter(x=>x.serviceType!=="DELIVERY"),...s.docs.map(d=>({id:d.id,serviceType:"DELIVERY",serviceId:d.data().serviceId,...d.data()} as Offer))]));return()=>{a();b()}},[authd]);
+ useEffect(()=>{if(!activeId||!activeType){setService(null);return}const coll=activeType==="RIDE"?"rides":"deliveries";return onSnapshot(doc(db,coll,activeId),s=>setService(s.exists()?s.data() as Service:null))},[activeId,activeType]);
+ useEffect(()=>{if(!online||!auth.currentUser)return;let alive=true;const send=async()=>{if(!alive)return;try{const p=await Location.getCurrentPositionAsync({accuracy:Location.Accuracy.High});await httpsCallable(functions,"updateDriverLocation")({latitude:p.coords.latitude,longitude:p.coords.longitude})}catch{}};void send();const timer=setInterval(send,10000);return()=>{alive=false;clearInterval(timer)}},[online]);
+ async function login(){if(!email||password.length<6){Alert.alert("Dados inválidos","Informe e-mail e senha.");return}setBusy(true);try{try{await signInWithEmailAndPassword(auth,email.trim(),password)}catch{await createUserWithEmailAndPassword(auth,email.trim(),password)}await httpsCallable(functions,"ensureDriverProfile")({displayName:email.split("@")[0]})}catch(e){Alert.alert("SancaMobi",e instanceof Error?e.message:"Falha")}finally{setBusy(false)}}
+ async function toggle(v:boolean){try{if(v){const p=await Location.requestForegroundPermissionsAsync();if(p.status!=="granted")throw new Error("Localização necessária.");const l=await Location.getCurrentPositionAsync({accuracy:Location.Accuracy.High});await httpsCallable(functions,"setDriverAvailability")({online:true,latitude:l.coords.latitude,longitude:l.coords.longitude})}else await httpsCallable(functions,"setDriverAvailability")({online:false});setOnline(v)}catch(e){Alert.alert("Disponibilidade",e instanceof Error?e.message:"Falha")}}
+ async function accept(o:Offer){try{if(o.serviceType==="RIDE"){await httpsCallable(functions,"acceptRide")({rideId:o.rideId});setActiveId(o.rideId||null)}else{await httpsCallable(functions,"acceptDelivery")({deliveryId:o.serviceId});setActiveId(o.serviceId||null)}setActiveType(o.serviceType);setOffers(x=>x.filter(y=>y.id!==o.id))}catch(e){Alert.alert("Oferta",e instanceof Error?e.message:"Indisponível")}}
+ async function advance(){if(!activeId||!activeType||!service)return;const next=(activeType==="RIDE"?rideNext:deliveryNext)[service.status];if(!next)return;setBusy(true);try{await httpsCallable(functions,activeType==="RIDE"?"updateRideStatus":"updateDeliveryStatus")({[activeType==="RIDE"?"rideId":"deliveryId"]:activeId,status:next});if(next==="TRIP_COMPLETED"||next==="DELIVERED")Alert.alert("Concluído","Serviço finalizado.")}catch(e){Alert.alert("Serviço",e instanceof Error?e.message:"Falha")}finally{setBusy(false)}}
+ async function cancel(){if(!activeId||!activeType)return;try{await httpsCallable(functions,activeType==="RIDE"?"updateRideStatus":"updateDeliveryStatus")({[activeType==="RIDE"?"rideId":"deliveryId"]:activeId,status:"CANCELLED"});setActiveId(null);setActiveType(null)}catch(e){Alert.alert("Serviço",e instanceof Error?e.message:"Falha")}}
+ if(!authd)return <View style={s.auth}><Text style={s.logo}>SancaMobi</Text><Text style={s.subtitle}>Motorista + Entregador</Text><TextInput style={s.input} placeholder="E-mail" autoCapitalize="none" value={email} onChangeText={setEmail}/><TextInput style={s.input} placeholder="Senha" secureTextEntry value={password} onChangeText={setPassword}/><Pressable style={s.primary} onPress={login}><Text style={s.primaryText}>{busy?"Entrando...":"Entrar / Criar conta"}</Text></Pressable></View>;
+ return <View style={s.container}><View style={s.header}><View><Text style={s.brand}>SancaMobi Pro</Text><Text style={s.small}>Motorista e Entregador</Text></View><Pressable onPress={()=>auth.signOut()}><Text>Sair</Text></Pressable></View><View style={s.card}><View style={s.row}><View><Text style={s.title}>Disponível para corridas e entregas</Text><Text style={s.small}>O sistema escolhe ofertas conforme sua habilitação.</Text></View><Switch value={online} onValueChange={toggle}/></View></View>{activeId&&service&&activeType?<View style={s.card}><Text style={s.badge}>{activeType==="RIDE"?"CORRIDA":"ENTREGA"}</Text><Text style={s.title}>{labels[service.status]||service.status}</Text><Text style={s.fare}>R$ {((service.estimatedFareCents||0)/100).toFixed(2)}</Text>{(activeType==="RIDE"?rideNext:deliveryNext)[service.status]&&<Pressable style={s.primary} onPress={advance} disabled={busy}><Text style={s.primaryText}>Avançar serviço</Text></Pressable>}{["ACCEPTED","DRIVER_ARRIVING","DRIVER_ARRIVED","GOING_TO_PICKUP","ARRIVED_PICKUP","PICKED_UP","IN_DELIVERY"].includes(service.status)&&<Pressable style={s.secondary} onPress={cancel}><Text>Cancelar</Text></Pressable>}</View>:<View style={s.card}><Text style={s.title}>Ofertas disponíveis</Text>{offers.length===0?<Text style={s.small}>Nenhuma oferta agora.</Text>:offers.map(o=><View style={s.offer} key={o.id}><View style={{flex:1}}><Text style={s.offerTitle}>{o.serviceType==="RIDE"?"🚗 Nova corrida":"📦 Nova entrega"}</Text><Text style={s.small}>{Number(o.distanceToPickupKm||0).toFixed(1)} km até a coleta</Text></View><Pressable style={s.accept} onPress={()=>accept(o)}><Text style={s.primaryText}>Aceitar</Text></Pressable></View>)}</View>}</View>
 }
-
-const styles=StyleSheet.create({
-  container:{flex:1,padding:20,paddingTop:60,gap:14,backgroundColor:"#f4f5f7"},
-  auth:{flex:1,justifyContent:"center",padding:24,gap:14,backgroundColor:"#f4f5f7"},
-  logo:{fontSize:38,fontWeight:"900",textAlign:"center"},
-  logoSmall:{fontSize:24,fontWeight:"900"},
-  subtitle:{textAlign:"center",fontSize:17,marginBottom:8},
-  small:{fontSize:13,color:"#666"},
-  header:{flexDirection:"row",justifyContent:"space-between",alignItems:"center"},
-  logout:{fontWeight:"800"},
-  card:{backgroundColor:"#fff",borderRadius:20,padding:18,gap:12},
-  row:{flexDirection:"row",justifyContent:"space-between",alignItems:"center"},
-  title:{fontSize:19,fontWeight:"800"},
-  input:{borderWidth:1,borderColor:"#ddd",borderRadius:12,padding:14,backgroundColor:"#fff"},
-  primary:{backgroundColor:"#111",padding:15,borderRadius:14,alignItems:"center"},
-  primaryText:{color:"#fff",fontWeight:"800"},
-  secondary:{borderWidth:1,borderColor:"#ddd",padding:14,borderRadius:14,alignItems:"center"},
-  offer:{flexDirection:"row",alignItems:"center",gap:12,borderTopWidth:1,borderTopColor:"#eee",paddingTop:12},
-  offerTitle:{fontWeight:"800"},
-  accept:{backgroundColor:"#111",padding:11,borderRadius:11},
-  fare:{fontSize:24,fontWeight:"900"}
-});
+const s=StyleSheet.create({container:{flex:1,padding:20,paddingTop:60,gap:14,backgroundColor:"#f4f5f7"},auth:{flex:1,justifyContent:"center",padding:24,gap:14,backgroundColor:"#f4f5f7"},logo:{fontSize:38,fontWeight:"900",textAlign:"center"},subtitle:{textAlign:"center",fontSize:17},brand:{fontSize:24,fontWeight:"900"},small:{fontSize:13,color:"#666"},header:{flexDirection:"row",justifyContent:"space-between",alignItems:"center"},card:{backgroundColor:"#fff",borderRadius:20,padding:18,gap:12},row:{flexDirection:"row",justifyContent:"space-between",alignItems:"center"},title:{fontSize:18,fontWeight:"800"},input:{borderWidth:1,borderColor:"#ddd",borderRadius:12,padding:14,backgroundColor:"#fff"},primary:{backgroundColor:"#111",padding:15,borderRadius:14,alignItems:"center"},primaryText:{color:"#fff",fontWeight:"800"},secondary:{borderWidth:1,borderColor:"#ddd",padding:14,borderRadius:14,alignItems:"center"},badge:{fontSize:12,fontWeight:"900"},fare:{fontSize:26,fontWeight:"900"},offer:{flexDirection:"row",alignItems:"center",gap:12,borderTopWidth:1,borderTopColor:"#eee",paddingTop:12},offerTitle:{fontWeight:"800"},accept:{backgroundColor:"#111",padding:11,borderRadius:11}});
