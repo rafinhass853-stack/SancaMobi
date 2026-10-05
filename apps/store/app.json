@@ -1,0 +1,1 @@
+{"expo":{"name":"SancaMobi Loja","slug":"sancamobi-store","version":"0.1.0","orientation":"portrait","scheme":"sancamobi-store","userInterfaceStyle":"automatic","android":{"package":"app.sancamobistore"},"plugins":["expo-router","expo-location"],"experiments":{"typedRoutes":true}}}
