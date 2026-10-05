@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "SancaMobi Motorista",
+    "slug": "sancamobi-driver",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "sancamobi-driver",
+    "userInterfaceStyle": "automatic",
+    "android": {
+      "package": "app.sancamobi.driver",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-location",
+      "expo-notifications"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
