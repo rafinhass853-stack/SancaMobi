@@ -362,6 +362,8 @@ export const setMenuPromotion = onCall(async request => {
   return {ok:true};
 });
 
+export const listActiveStores = onCall(async request => { uid(request); const snap=await db.collection("stores").where("active","==",true).limit(100).get(); return {stores:snap.docs.map(d=>({id:d.id,...d.data()}))}; });
+
 export const getStoreCatalog = onCall(async request => {
   uid(request);
   const storeId=String(request.data?.storeId??"");
