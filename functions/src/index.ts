@@ -4,6 +4,7 @@ import { defineSecret } from "firebase-functions/params";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { initializeApp } from "firebase-admin/app";
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { DEFAULT_BRAZIL_PROFILE, passengerEligible } from "./regulatory";
 
 initializeApp();
 setGlobalOptions({ region: "southamerica-east1", maxInstances: 10 });
