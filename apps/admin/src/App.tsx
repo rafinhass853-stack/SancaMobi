@@ -6,6 +6,7 @@ import { auth, db, functions } from "./lib/firebase";
 
 type Driver = { id:string; displayName?:string; email?:string; status?:string; approved?:boolean; online?:boolean; city?:string };
 type Store = { id:string; displayName?:string; email?:string; status?:string; active?:boolean };
+type Passenger = { id:string; displayName?:string; email?:string; status?:string; active?:boolean };
 
 export default function App() {
   const [active,setActive]=useState("Dashboard");
@@ -16,6 +17,7 @@ export default function App() {
   const [rides,setRides]=useState<any[]>([]);
   const [deliveries,setDeliveries]=useState<any[]>([]);
   const [stores,setStores]=useState<Store[]>([]);
+  const [passengers,setPassengers]=useState<Passenger[]>([]);
   const [pricing,setPricing]=useState({baseFareCents:600,perKmCents:220,perMinuteCents:35,minimumFareCents:1000,cancellationFeeCents:0,commissionPercent:20});
   const [message,setMessage]=useState("");
   const [showGuide,setShowGuide]=useState(false);
@@ -30,7 +32,8 @@ export default function App() {
     const unsubP=onSnapshot(doc(db,"pricing","default"),s=>{if(s.exists())setPricing(p=>({...p,...s.data()} as typeof p));});
     const unsubD=onSnapshot(query(collection(db,"deliveries"),orderBy("createdAt","desc"),limit(50)),s=>setDeliveries(s.docs.map(d=>({id:d.id,...d.data()}))),e=>setMessage(e.message));
     const unsubS=onSnapshot(query(collection(db,"stores"),orderBy("updatedAt","desc"),limit(100)),s=>setStores(s.docs.map(d=>({id:d.id,...d.data()} as Store))),e=>setMessage(e.message));
-    return()=>{unsub();unsubR();unsubP();unsubD();unsubS();};
+    const unsubU=onSnapshot(query(collection(db,"passengers"),orderBy("updatedAt","desc"),limit(100)),s=>setPassengers(s.docs.map(d=>({id:d.id,...d.data()} as Passenger))),e=>setMessage(e.message));
+    return()=>{unsub();unsubR();unsubP();unsubD();unsubS();unsubU();};
   },[user]);
 
   async function login(){
@@ -76,7 +79,7 @@ export default function App() {
       {active==="Entregas"&&<section className="panel"><h2>Entregas</h2>{deliveries.map(r=><div className="row" key={r.id}><b>{r.id.slice(0,8)}</b><span>{r.status}</span><span>R$ {(Number(r.estimatedFareCents||0)/100).toFixed(2)}</span><span>{r.paymentStatus||"PENDING"}</span></div>)}</section>}
       {active==="Lojas"&&<section className="panel"><h2>Lojas</h2>{stores.map(s=><div className="row" key={s.id}><div><b>{s.displayName||"Sem nome"}</b><small>{s.email||""} · {s.status||"PENDING_APPROVAL"}</small></div><span>{s.active?"ATIVA":"PENDENTE"}</span><button onClick={async()=>{try{await httpsCallable(functions,"setStoreApproval")({storeId:s.id,approved:!s.active});setMessage("Loja atualizada.")}catch(e){setMessage(e instanceof Error?e.message:"Sem permissão.")}}}>{s.active?"Bloquear":"Aprovar"}</button></div>)}</section>}
       {active==="Tarifas"&&<section className="panel form"><h2>Tarifa padrão</h2>{Object.entries(pricing).filter(([k])=>k!=="commissionPercent"||true).map(([k,v])=><label key={k}>{k}<input type="number" value={v} onChange={e=>setPricing(p=>({...p,[k]:Number(e.target.value)}))}/></label>)}<button onClick={save}>Salvar tarifas</button></section>}
-      {active==="Passageiros"&&<section className="panel"><h2>Passageiros</h2><p>Cadastros de passageiros ficam ativos automaticamente após o cadastro no app. Use esta área para acompanhar os usuários.</p></section>}
+      {active==="Passageiros"&&<section className="panel"><h2>Passageiros</h2>{passengers.map(p=><div className="row" key={p.id}><div><b>{p.displayName||"Sem nome"}</b><small>{p.email||""} · {p.status||"PENDING_APPROVAL"}</small></div><span>{p.active?"ATIVO":"PENDENTE"}</span><button onClick={async()=>{try{await httpsCallable(functions,"setPassengerApproval")({passengerId:p.id,approved:!p.active});setMessage("Passageiro atualizado.")}catch(e){setMessage(e instanceof Error?e.message:"Sem permissão.")}}}>{p.active?"Bloquear":"Aprovar"}</button></div>)}</section>}
       {active==="Cadastros"&&<section className="panel"><h2>Fluxo de cadastro e aprovação</h2><p>Você continua sendo o ponto de controle: motoristas e entregadores entram como PENDENTE, lojas entram como PENDENTE e só ficam operacionais após sua aprovação.</p><div className="cards"><article><strong>{drivers.filter(d=>!d.approved).length}</strong><span>Motoristas/entregadores aguardando aprovação</span></article><article><strong>{stores.filter(s=>!s.active).length}</strong><span>Estabelecimentos aguardando aprovação</span></article></div><h3>Checklist antes de aprovar</h3><ul><li>Motorista: CNH, EAR, documento do veículo, seguro e autorização local quando aplicável.</li><li>Entregador: identidade/cadastro, veículo e dados operacionais.</li><li>Estabelecimento: nome, contato, endereço e operação.</li></ul></section>}
       {["Veículos","Financeiro","Suporte"].includes(active)&&<section className="panel"><h2>{active}</h2><p>Módulo conectado à base. As operações desta área serão ampliadas sobre o mesmo backend seguro.</p></section>}
     </main>
