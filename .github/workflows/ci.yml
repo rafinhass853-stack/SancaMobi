@@ -29,6 +29,8 @@ jobs:
         run: pnpm --filter @sancamobi/passenger typecheck
       - name: Typecheck driver
         run: pnpm --filter @sancamobi/driver typecheck
+      - name: Typecheck establishment web
+        run: pnpm --filter @sancamobi/store-web typecheck
       - name: Test admin
         run: pnpm --filter @sancamobi/admin test -- --passWithNoTests
 
@@ -73,6 +75,8 @@ jobs:
             exit 1
           fi
           printf "%s" "$MERCADOPAGO_ACCESS_TOKEN_TEST" | pnpm dlx firebase-tools@latest functions:secrets:set MERCADOPAGO_ACCESS_TOKEN_TEST --project sancamobi --non-interactive --data-file=-
+      - name: Build establishment web
+        run: pnpm --filter @sancamobi/store-web build
       - name: Build functions
         run: pnpm --filter @sancamobi/functions build
       - name: Deploy Firebase
