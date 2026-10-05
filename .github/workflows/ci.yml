@@ -52,7 +52,7 @@ jobs:
       - name: Build admin
         run: pnpm --filter @sancamobi/admin build
         env:
-          VITE_FIREBASE_API_KEY: "AIzaSyDMXFOdZt1aNkLS6Sd6kvwnEjGjTjUXpOg"
+          VITE_FIREBASE_API_KEY: "${{ secrets.SANCAMOBI_FIREBASE_API_KEY }}"
           VITE_FIREBASE_AUTH_DOMAIN: sancamobi.firebaseapp.com
           VITE_FIREBASE_PROJECT_ID: sancamobi
           VITE_FIREBASE_STORAGE_BUCKET: sancamobi.firebasestorage.app
@@ -61,6 +61,8 @@ jobs:
           VITE_ENV: production
       - name: Build functions
         run: pnpm --filter @sancamobi/functions build
+      - name: Configure Functions artifact cleanup policy
+        run: pnpm dlx firebase-tools@latest functions:artifacts:setpolicy --project sancamobi --location southamerica-east1 --days 7 --non-interactive
       - run: pnpm dlx firebase-tools@latest deploy --project sancamobi --non-interactive
       - if: always()
         run: rm -f "$GOOGLE_APPLICATION_CREDENTIALS"
