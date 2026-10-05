@@ -1,0 +1,26 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    match /users/{userId}/{allPaths=**} {
+      allow read, write: if signedIn() && request.auth.uid == userId;
+    }
+
+    match /vehicles/{vehicleId}/{allPaths=**} {
+      allow read: if signedIn();
+      allow write: if signedIn() && request.auth.token.role in [
+        'SUPER_ADMIN',
+        'ADMIN',
+        'OPERATOR'
+      ];
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
