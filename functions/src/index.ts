@@ -309,6 +309,113 @@ export const updateDeliveryStatus = onCall(async request => {
   return {ok:true,status};
 });
 
+
+function menuPriceCents(value: unknown): number {
+  const x=Number(value);
+  if(!Number.isInteger(x)||x<0||x>1000000) throw new HttpsError("invalid-argument","Preço inválido.");
+  return x;
+}
+
+export const upsertMenuCategory = onCall(async request => {
+  const storeId=uid(request);
+  const store=await db.collection("stores").doc(storeId).get();
+  if(!store.exists || store.data()?.active!==true) throw new HttpsError("failed-precondition","Loja não aprovada.");
+  const name=String(request.data?.name??"").trim();
+  if(!name||name.length>80) throw new HttpsError("invalid-argument","Nome da categoria inválido.");
+  const categoryId=String(request.data?.categoryId??db.collection("menuCategories").doc().id);
+  await db.collection("menuCategories").doc(categoryId).set({categoryId,storeId,name,description:String(request.data?.description??"").trim().slice(0,240),sortOrder:Number(request.data?.sortOrder??0),active:request.data?.active!==false,updatedAt:FieldValue.serverTimestamp()},{merge:true});
+  return {ok:true,categoryId};
+});
+
+export const upsertMenuItem = onCall(async request => {
+  const storeId=uid(request);
+  const store=await db.collection("stores").doc(storeId).get();
+  if(!store.exists || store.data()?.active!==true) throw new HttpsError("failed-precondition","Loja não aprovada.");
+  const name=String(request.data?.name??"").trim();
+  const categoryId=String(request.data?.categoryId??"");
+  if(!name||name.length>120||!categoryId) throw new HttpsError("invalid-argument","Produto ou categoria inválidos.");
+  const itemId=String(request.data?.itemId??db.collection("menuItems").doc().id);
+  const priceCents=menuPriceCents(request.data?.priceCents);
+  const promotionalPriceCents=request.data?.promotionalPriceCents==null?null:menuPriceCents(request.data.promotionalPriceCents);
+  if(promotionalPriceCents!==null&&promotionalPriceCents>priceCents) throw new HttpsError("invalid-argument","Preço promocional não pode ser maior que o preço normal.");
+  await db.collection("menuItems").doc(itemId).set({
+    itemId,storeId,categoryId,name,description:String(request.data?.description??"").trim().slice(0,500),
+    imageUrl:String(request.data?.imageUrl??"").trim(),priceCents,promotionalPriceCents,
+    available:request.data?.available!==false,featured:Boolean(request.data?.featured),
+    preparationMinutes:Math.max(0,Math.min(240,Number(request.data?.preparationMinutes??20))),
+    tags:Array.isArray(request.data?.tags)?request.data.tags.map((x:any)=>String(x).slice(0,30)).slice(0,10):[],
+    updatedAt:FieldValue.serverTimestamp()
+  },{merge:true});
+  return {ok:true,itemId};
+});
+
+export const setMenuPromotion = onCall(async request => {
+  const storeId=uid(request), itemId=String(request.data?.itemId??"");
+  const item=await db.collection("menuItems").doc(itemId).get();
+  if(!item.exists||item.data()?.storeId!==storeId) throw new HttpsError("permission-denied","Produto não pertence à loja.");
+  const enabled=Boolean(request.data?.enabled);
+  const promotionalPriceCents=enabled?menuPriceCents(request.data?.promotionalPriceCents):null;
+  const normal=Number(item.data()?.priceCents??0);
+  if(enabled&&promotionalPriceCents!<normal){} 
+  if(enabled&&promotionalPriceCents>normal) throw new HttpsError("invalid-argument","Promoção deve ter preço menor que o normal.");
+  await item.ref.update({promotionalPriceCents,updatedAt:FieldValue.serverTimestamp()});
+  return {ok:true};
+});
+
+export const getStoreCatalog = onCall(async request => {
+  uid(request);
+  const storeId=String(request.data?.storeId??"");
+  if(!storeId) throw new HttpsError("invalid-argument","storeId é obrigatório.");
+  const store=await db.collection("stores").doc(storeId).get();
+  if(!store.exists||store.data()?.active!==true) throw new HttpsError("not-found","Loja não encontrada.");
+  const [cats,items]=await Promise.all([
+    db.collection("menuCategories").where("storeId","==",storeId).where("active","==",true).orderBy("sortOrder").get(),
+    db.collection("menuItems").where("storeId","==",storeId).where("available","==",true).get()
+  ]);
+  return {store:{id:store.id,...store.data()},categories:cats.docs.map(x=>({id:x.id,...x.data()})),items:items.docs.map(x=>({id:x.id,...x.data()}))};
+});
+
+export const createFoodOrder = onCall(async request => {
+  const customerId=uid(request);
+  const storeId=String(request.data?.storeId??"");
+  const rawItems=Array.isArray(request.data?.items)?request.data.items:[];
+  if(!storeId||rawItems.length<1||rawItems.length>50) throw new HttpsError("invalid-argument","Carrinho inválido.");
+  const store=await db.collection("stores").doc(storeId).get();
+  if(!store.exists||store.data()?.active!==true) throw new HttpsError("failed-precondition","Loja indisponível.");
+  const ids=rawItems.map((x:any)=>String(x.itemId)).filter(Boolean);
+  const unique=[...new Set(ids)];
+  const snaps=await Promise.all(unique.map(id=>db.collection("menuItems").doc(id).get()));
+  const byId=new Map(snaps.filter(s=>s.exists).map(s=>[s.id,s.data()!]));
+  const lines=rawItems.map((x:any)=>{
+    const item=byId.get(String(x.itemId));
+    const qty=Math.max(1,Math.min(20,Math.floor(Number(x.quantity))));
+    if(!item||item.storeId!==storeId||item.available!==true||!Number.isFinite(qty)) throw new HttpsError("failed-precondition","Produto indisponível.");
+    const unit=Number(item.promotionalPriceCents??item.priceCents);
+    return {itemId:item.itemId,name:item.name,quantity:qty,unitPriceCents:unit,totalCents:unit*qty};
+  });
+  const subtotalCents=lines.reduce((a,x)=>a+x.totalCents,0);
+  const deliveryFeeCents=Math.max(0,Math.round(Number(request.data?.deliveryFeeCents??0)));
+  const totalCents=subtotalCents+deliveryFeeCents;
+  const ref=db.collection("foodOrders").doc();
+  await ref.set({orderId:ref.id,customerId,storeId,items:lines,subtotalCents,deliveryFeeCents,totalCents,status:"PENDING_STORE",paymentStatus:"PENDING",deliveryStatus:"WAITING_DISPATCH",deliveryAddress:request.data?.deliveryAddress??null,notes:String(request.data?.notes??"").slice(0,500),createdAt:FieldValue.serverTimestamp(),updatedAt:FieldValue.serverTimestamp()});
+  return {orderId:ref.id,totalCents};
+});
+
+export const updateFoodOrderStatus = onCall(async request => {
+  const id=uid(request), orderId=String(request.data?.orderId??""), status=String(request.data?.status??"");
+  const ref=db.collection("foodOrders").doc(orderId), snap=await ref.get();
+  if(!snap.exists) throw new HttpsError("not-found","Pedido não encontrado.");
+  const data=snap.data()!;
+  const storeId=String(data.storeId??"");
+  const allowedAdmin=["CANCELLED"];
+  const isStore=id===storeId, isAdminUser=(()=>{const role=String(request.auth?.token?.role??"");return ["SUPER_ADMIN","ADMIN","OPERATOR"].includes(role)})();
+  if(!isStore&&!isAdminUser) throw new HttpsError("permission-denied","Sem permissão.");
+  const transitions:Record<string,string[]>={PENDING_STORE:["ACCEPTED","REJECTED","CANCELLED"],ACCEPTED:["PREPARING","CANCELLED"],PREPARING:["READY","CANCELLED"],READY:["OUT_FOR_DELIVERY","CANCELLED"],OUT_FOR_DELIVERY:["DELIVERED"],REJECTED:[],DELIVERED:[],CANCELLED:[]};
+  if(!transitions[data.status]?.includes(status)&&!allowedAdmin.includes(status)) throw new HttpsError("failed-precondition","Status de pedido inválido.");
+  await ref.update({status,updatedAt:FieldValue.serverTimestamp(),...(status==="DELIVERED"?{deliveredAt:FieldValue.serverTimestamp()}: {})});
+  return {ok:true,status};
+});
+
 export const createMercadoPagoPix = onCall(async request => {
   const requester=uid(request), serviceId=String(request.data?.serviceId??""), serviceType=String(request.data?.serviceType??"");
   if(!["RIDE","DELIVERY"].includes(serviceType)||!serviceId) throw new HttpsError("invalid-argument","serviceId e serviceType são obrigatórios.");
