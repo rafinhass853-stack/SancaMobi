@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import MapView, { Marker, Region } from "react-native-maps";
 import * as Location from "expo-location";
 import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword } from "firebase/auth";
@@ -167,8 +167,8 @@ export default function PassengerHome() {
       <Text style={styles.subtitle}>Mobilidade de São Carlos</Text>
       <View style={styles.card}>
         <Text style={styles.label}>Acesse sua conta</Text>
-        <Text style={styles.inputHint}>E-mail</Text>
-        <View style={styles.input}><Text style={styles.inputText}>{email || "Digite seu e-mail no teclado"}</Text></View>
+        <TextInput style={styles.input} placeholder="E-mail" autoCapitalize="none" keyboardType="email-address" value={email} onChangeText={setEmail}/>
+        <TextInput style={styles.input} placeholder="Senha" secureTextEntry value={password} onChangeText={setPassword}/>
         <Pressable style={styles.primary} onPress={authenticate} disabled={busy}>
           <Text style={styles.primaryText}>{busy ? "Entrando..." : "Entrar / Criar conta"}</Text>
         </Pressable>
@@ -209,8 +209,15 @@ export default function PassengerHome() {
         {!["TRIP_COMPLETED","CANCELLED","EXPIRED","NO_DRIVER"].includes(ride.status) &&
           <Pressable style={styles.cancel} onPress={cancelRide}><Text style={styles.cancelText}>Cancelar corrida</Text></Pressable>}
         {ride.status === "TRIP_COMPLETED" &&
-          <Pressable style={styles.primary} onPress={()=>Alert.alert("Avaliação","Obrigado! A avaliação será disponibilizada no próximo módulo.")}>
-            <Text style={styles.primaryText}>Avaliar corrida</Text>
+          <Pressable style={styles.primary} onPress={async()=>{
+            try {
+              await httpsCallable(functions,"submitRating")({rideId:activeRideId,rating:5,comment:"Excelente experiência."});
+              Alert.alert("Obrigado","Avaliação enviada.");
+            } catch(e) {
+              Alert.alert("Avaliação",e instanceof Error?e.message:"Não foi possível avaliar.");
+            }
+          }}>
+            <Text style={styles.primaryText}>Avaliar com 5 estrelas</Text>
           </Pressable>}
       </> : <>
         <Text style={styles.title}>{message}</Text>
