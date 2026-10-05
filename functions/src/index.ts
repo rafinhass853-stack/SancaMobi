@@ -2,6 +2,7 @@ import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
 import { setGlobalOptions } from "firebase-functions/v2";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { initializeApp } from "firebase-admin/app";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 initializeApp();
 setGlobalOptions({ region: "southamerica-east1", maxInstances: 10 });
@@ -60,6 +61,15 @@ export const updateDriverLocation = onCall(async request => {
     .where("status","in",["ACCEPTED","DRIVER_ARRIVING","DRIVER_ARRIVED","TRIP_STARTED"])
     .limit(10)
     .get();
+
+  const activeDeliveries = await db.collection("deliveries").where("courierId","==",id).where("status","in",["ACCEPTED","GOING_TO_PICKUP","ARRIVED_PICKUP","PICKED_UP","IN_DELIVERY","ARRIVED_DESTINATION"]).limit(10).get();
+  if (!activeDeliveries.empty) {
+    const batch = db.batch();
+    for (const delivery of activeDeliveries.docs) {
+      batch.update(delivery.ref, { courierLocation: { latitude, longitude }, courierLocationUpdatedAt: now, updatedAt: now });
+    }
+    await batch.commit();
+  }
 
   if (!activeRides.empty) {
     const batch = db.batch();
@@ -332,6 +342,19 @@ export const mercadoPagoWebhook = onRequest(async (req,res) => {
     if(req.method!=="POST"){res.status(405).send("Method Not Allowed");return;}
     const type=String(req.body?.type??req.query?.type??"");
     const paymentId=String(req.body?.data?.id??req.query?.["data.id"]??"");
+    const signature=String(req.headers["x-signature"]??"");
+    const requestId=String(req.headers["x-request-id"]??"");
+    const secret=String(process.env.MERCADOPAGO_WEBHOOK_SECRET??"");
+    if(secret){
+      const parts=signature.split(",").map(x=>x.trim().split("="));
+      const ts=parts.find(x=>x[0]==="ts")?.[1]??"";
+      const v1=parts.find(x=>x[0]==="v1")?.[1]??"";
+      const manifest=`id:${paymentId};request-id:${requestId};ts:${ts};`;
+      const expected=createHmac("sha256",secret).update(manifest).digest("hex");
+      if(!v1||v1.length!==expected.length||!timingSafeEqual(Buffer.from(v1),Buffer.from(expected))){res.status(401).send("Invalid signature");return;}
+    } else {
+      res.status(503).send("Webhook secret not configured"); return;
+    }
     if(type!=="payment"||!paymentId){res.status(200).send("ignored");return;}
     const tx=await db.collection("paymentTransactions").doc(paymentId).get();
     if(!tx.exists){res.status(200).send("unknown");return;}
