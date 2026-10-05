@@ -19,6 +19,10 @@
     ],
     "rewrites": [
       {
+        "source": "/loja/**",
+        "destination": "/loja/index.html"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }
