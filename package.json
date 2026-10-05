@@ -1,0 +1,12 @@
+{
+  "name": "sancamobi",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Plataforma de mobilidade urbana de São Carlos",
+  "packageManager": "pnpm@10.18.2",
+  "scripts": {
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test"
+  }
+}
