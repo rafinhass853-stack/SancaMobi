@@ -1,0 +1,30 @@
+name: Bootstrap Admin
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: "E-mail da conta Firebase Auth que será ADMIN"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.18.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --frozen-lockfile=false
+      - name: Set ADMIN custom claim
+        env:
+          SANCAMOBI_FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.SANCAMOBI_FIREBASE_SERVICE_ACCOUNT_JSON }}
+          SANCAMOBI_ADMIN_EMAIL: ${{ inputs.email }}
+        run: node functions/scripts/set-admin-claim.cjs
