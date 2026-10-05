@@ -21,8 +21,6 @@ export default function App() {
   const [pricing,setPricing]=useState({baseFareCents:600,perKmCents:220,perMinuteCents:35,minimumFareCents:1000,cancellationFeeCents:0,commissionPercent:20});
   const [message,setMessage]=useState("");
   const [showGuide,setShowGuide]=useState(false);
-  const [compliance,setCompliance]=useState<Record<string,any>>({});
-  const [registration,setRegistration]=useState({name:"",email:"",type:"DRIVER",city:"São Carlos",licenseNumber:"",licenseValid:false,earDeclared:false,vehicleDocumentSubmitted:false,insuranceSubmitted:false,localAuthorizationSubmitted:false});
 
   useEffect(()=>onAuthStateChanged(auth,setUser),[]);
   useEffect(()=>{
