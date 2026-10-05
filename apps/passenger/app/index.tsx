@@ -8,6 +8,7 @@ import { httpsCallable } from "firebase/functions";
 import { auth, db, functions } from "../lib/firebase";
 
 type Coord = { latitude: number; longitude: number };
+type PaymentMethod = "PIX" | "CREDIT_CARD" | "DEBIT_CARD" | "GOOGLE_PAY" | "APPLE_PAY";
 type Ride = {
   status: string;
   pickup: Coord;
@@ -17,6 +18,8 @@ type Ride = {
   estimatedDistanceKm?: number;
   estimatedDurationMin?: number;
   estimatedFareCents?: number;
+  paymentStatus?: string;
+  paymentMethod?: PaymentMethod;
 };
 
 const DEFAULT_REGION: Region = {
@@ -61,6 +64,7 @@ export default function PassengerHome() {
   const [activeRideId,setActiveRideId]=useState<string | null>(null);
   const [ride,setRide]=useState<Ride | null>(null);
   const [message,setMessage]=useState("Toque no mapa para escolher o destino.");
+  const paymentMethod: PaymentMethod = "PIX";
 
   useEffect(() => onAuthStateChanged(auth,user => setAuthenticated(Boolean(user))),[]);
 
@@ -138,7 +142,8 @@ export default function PassengerHome() {
         destination,
         estimatedDistanceKm: calculated.km,
         estimatedDurationMin: calculated.min,
-        estimatedFareCents: fareCents
+        estimatedFareCents: fareCents,
+        paymentMethod
       });
       const data = result.data as {rideId:string;status:string};
       setActiveRideId(data.rideId);
@@ -149,6 +154,26 @@ export default function PassengerHome() {
     } catch(e) {
       Alert.alert("SancaMobi",e instanceof Error ? e.message : "Falha ao solicitar corrida.");
     } finally { setBusy(false); }
+  }
+
+  async function payRide() {
+    if (!activeRideId) return;
+    try {
+      const result = await httpsCallable(functions,"createMercadoPagoPix")({
+        serviceId: activeRideId,
+        serviceType: "RIDE",
+        paymentMethod
+      });
+      const data = result.data as {qrCode?:string;ticketUrl?:string;status:string};
+      if (data.status === "approved" || data.status === "APPROVED") {
+        setMessage("Pagamento aprovado. Procurando motorista...");
+      } else {
+        Alert.alert("Mercado Pago", data.qrCode ? "Pix criado. Use o QR Code/código para concluir o pagamento." : "Pagamento "+data.status+".");
+        setMessage("Aguardando confirmação do pagamento.");
+      }
+    } catch(e) {
+      Alert.alert("Pagamento",e instanceof Error?e.message:"Não foi possível criar o pagamento.");
+    }
   }
 
   async function cancelRide() {
@@ -206,6 +231,7 @@ export default function PassengerHome() {
           {ride.estimatedFareCents ? " R$ " + (ride.estimatedFareCents/100).toFixed(2) : ""}
         </Text>
         {ride.driverLocation && <Text style={styles.live}>● Motorista localizado em tempo real</Text>}
+        {ride.paymentStatus !== "approved" && ride.paymentStatus !== "APPROVED" && !["CANCELLED","EXPIRED"].includes(ride.status) && <Pressable style={styles.primary} onPress={payRide}><Text style={styles.primaryText}>Pagar corrida via Mercado Pago (Pix)</Text></Pressable>}
         {!["TRIP_COMPLETED","CANCELLED","EXPIRED","NO_DRIVER"].includes(ride.status) &&
           <Pressable style={styles.cancel} onPress={cancelRide}><Text style={styles.cancelText}>Cancelar corrida</Text></Pressable>}
         {ride.status === "TRIP_COMPLETED" &&
